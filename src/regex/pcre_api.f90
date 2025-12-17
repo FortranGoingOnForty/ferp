@@ -18,6 +18,7 @@ module pcre_api
   integer(c_int), parameter, public :: PCRE2_DOTALL          = int(z'00000020', c_int)
   integer(c_int), parameter, public :: PCRE2_EXTENDED        = int(z'00000080', c_int)
   integer(c_int), parameter, public :: PCRE2_UTF             = int(z'00080000', c_int)
+  integer(c_int), parameter, public :: PCRE2_UCP             = int(z'00020000', c_int)  ! Unicode properties
   integer(c_int), parameter, public :: PCRE2_NO_UTF_CHECK    = int(z'40000000', c_int)
 
   !---------------------------------------------------------------------------
@@ -167,8 +168,8 @@ contains
     re%error_code = 0
     re%error_msg = ''
 
-    ! Set options
-    options = 0_c_int
+    ! Set options - enable UTF-8 and Unicode properties by default
+    options = ior(PCRE2_UTF, PCRE2_UCP)
     if (present(ignore_case)) then
       if (ignore_case) options = ior(options, PCRE2_CASELESS)
     end if

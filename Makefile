@@ -198,6 +198,10 @@ test: $(TARGET)
 	@echo "test123" | ./ferp -P '\d+' | grep -q "test123" && echo "PASS: -P digit class"
 	@echo "test123more456" | ./ferp -P -o '\d+' | head -1 | grep -q "123" && echo "PASS: -P -o only matching"
 	@echo "HELLO" | ./ferp -P -i 'hello' | grep -q "HELLO" && echo "PASS: -P -i case insensitive"
+	@echo "Hello123" | ./ferp -P -o '\p{L}+' | grep -q "Hello" && echo "PASS: -P Unicode \\p{L} letter class"
+	@echo "Hello123" | ./ferp -P -o '\p{N}+' | grep -q "123" && echo "PASS: -P Unicode \\p{N} number class"
+	@echo "café" | ./ferp -P '\p{L}+' | grep -q "café" && echo "PASS: -P Unicode accented chars"
+	@echo "CAFÉ" | ./ferp -P -i 'café' | grep -q "CAFÉ" && echo "PASS: -P Unicode case folding"
 	@echo "=== All tests complete! ==="
 
 # Help

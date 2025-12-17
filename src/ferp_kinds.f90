@@ -16,7 +16,7 @@ module ferp_kinds
   integer, parameter :: dp = real64
 
   !> Buffer size constants
-  integer, parameter :: max_line_len = 8192
+  integer, parameter :: max_line_len = 1048576  ! 1MB max line length
   integer, parameter :: max_path_len = 4096
   integer, parameter :: max_pattern_len = 4096
 

@@ -133,13 +133,21 @@ contains
       return
     end if
 
+    ! Strip trailing carriage return for Windows line endings (\r\n)
+    line_len = len_trim(line)
+    if (line_len > 0) then
+      if (line(line_len:line_len) == char(13)) then
+        line(line_len:line_len) = ' '
+        line_len = line_len - 1
+      end if
+    end if
+
     ! Update state
     this%line_number = this%line_number + 1
     line_num = this%line_number
     byte_off = this%byte_offset
 
-    ! Update byte offset (line length + newline)
-    line_len = len_trim(line)
+    ! Update byte offset (line length + newline, +1 for CR if present)
     this%byte_offset = this%byte_offset + int(line_len, i64) + 1_i64
 
     success = .true.
