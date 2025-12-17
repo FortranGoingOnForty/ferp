@@ -34,6 +34,7 @@ MAIN_SRCS = $(SRC_DIR)/ferp_kinds.f90 \
             $(SRC_DIR)/ferp_options.f90 \
             $(SRC_DIR)/ferp_io.f90 \
             $(SRC_DIR)/ferp_output.f90 \
+            $(SRC_DIR)/ferp_dir.f90 \
             $(SRC_DIR)/ferp_cli.f90 \
             $(SRC_DIR)/ferp_matcher.f90 \
             $(SRC_DIR)/main.f90
@@ -84,9 +85,10 @@ $(BUILD_DIR)/regex_api.o: $(BUILD_DIR)/regex_types.o $(BUILD_DIR)/regex_lexer.o 
 $(BUILD_DIR)/ferp_options.o: $(BUILD_DIR)/ferp_kinds.o
 $(BUILD_DIR)/ferp_io.o: $(BUILD_DIR)/ferp_kinds.o
 $(BUILD_DIR)/ferp_output.o: $(BUILD_DIR)/ferp_kinds.o $(BUILD_DIR)/ferp_options.o
+$(BUILD_DIR)/ferp_dir.o: $(BUILD_DIR)/ferp_kinds.o
 $(BUILD_DIR)/ferp_cli.o: $(BUILD_DIR)/ferp_kinds.o $(BUILD_DIR)/ferp_options.o
 $(BUILD_DIR)/ferp_matcher.o: $(BUILD_DIR)/ferp_kinds.o $(BUILD_DIR)/ferp_options.o $(BUILD_DIR)/ferp_io.o $(BUILD_DIR)/ferp_output.o $(BUILD_DIR)/regex_api.o
-$(BUILD_DIR)/main.o: $(BUILD_DIR)/ferp_kinds.o $(BUILD_DIR)/ferp_options.o $(BUILD_DIR)/ferp_cli.o $(BUILD_DIR)/ferp_io.o $(BUILD_DIR)/ferp_matcher.o
+$(BUILD_DIR)/main.o: $(BUILD_DIR)/ferp_kinds.o $(BUILD_DIR)/ferp_options.o $(BUILD_DIR)/ferp_cli.o $(BUILD_DIR)/ferp_io.o $(BUILD_DIR)/ferp_dir.o $(BUILD_DIR)/ferp_matcher.o
 
 # Clean build artifacts
 clean:
@@ -162,6 +164,22 @@ test: $(TARGET)
 	@echo "hello" | ./ferp "" && echo "PASS: empty pattern matches"
 	@echo "a+b" | ./ferp "a+b" && echo "PASS: BRE + is literal"
 	@echo "a|b" | ./ferp "a|b" && echo "PASS: BRE | is literal"
+	@echo "=== Recursive search tests ==="
+	@./ferp -r "module" src/ | grep -q "ferp_kinds" && echo "PASS: -r recursive search"
+	@./ferp -r "module" src/ | grep -q "regex_types" && echo "PASS: -r searches subdirs"
+	@./ferp -r --include="*.f90" "module" src/ | grep -q "ferp_kinds" && echo "PASS: --include filter"
+	@./ferp -r --exclude="*output*" "module" src/ | grep -qv "ferp_output" && echo "PASS: --exclude filter"
+	@./ferp -r --exclude-dir="regex" "module" src/ | grep -qv "regex_types" && echo "PASS: --exclude-dir filter"
+	@echo "=== Binary file tests ==="
+	@printf 'hello\x00world\n' > /tmp/ferp_binary_test.txt
+	@./ferp "hello" /tmp/ferp_binary_test.txt | grep -q "Binary file" && echo "PASS: binary file detection"
+	@./ferp -a "hello" /tmp/ferp_binary_test.txt | grep -q "hello" && echo "PASS: -a treats binary as text"
+	@./ferp -I "hello" /tmp/ferp_binary_test.txt; test $$? -eq 1 && echo "PASS: -I skips binary"
+	@rm -f /tmp/ferp_binary_test.txt
+	@echo "=== Color mode tests ==="
+	@./ferp --color=always "module" src/ferp_kinds.f90 | grep -q '\[01;31m' && echo "PASS: --color=always outputs ANSI"
+	@./ferp --color=never "module" src/ferp_kinds.f90 | grep -qv '\[01;31m' && echo "PASS: --color=never no ANSI"
+	@./ferp --color=auto "module" src/ferp_kinds.f90 | grep -qv '\[01;31m' && echo "PASS: --color=auto no ANSI when piped"
 	@echo "=== All tests complete! ==="
 
 # Help

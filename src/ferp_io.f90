@@ -7,6 +7,7 @@ module ferp_io
 
   public :: input_source
   public :: SOURCE_STDIN, SOURCE_FILE
+  public :: check_binary_file
 
   integer, parameter :: SOURCE_STDIN = 1
   integer, parameter :: SOURCE_FILE = 2
@@ -45,10 +46,10 @@ contains
 
     success = .false.
 
-    ! Reset state
+    ! Reset state (but preserve is_binary if already set by caller)
     this%byte_offset = 0
     this%line_number = 0
-    this%is_binary = .false.
+    ! Note: is_binary is NOT reset here - it should be set BEFORE calling open
     this%eof_reached = .false.
 
     ! Handle stdin
@@ -134,38 +135,78 @@ contains
 
   end function source_read_line
 
-  subroutine source_check_binary(this)
-    !> Check if the file is binary by looking for NUL bytes
-    class(input_source), intent(inout) :: this
+  function check_binary_file(filename) result(is_binary)
+    !> Check if a file is binary by looking for NUL bytes or non-text chars
+    !> This must be called BEFORE the file is opened for reading
+    character(len=*), intent(in) :: filename
+    logical :: is_binary
 
-    character(len=512) :: buffer
-    integer :: ios, i, check_unit
+    integer, parameter :: CHECK_SIZE = 8192
+    character(len=CHECK_SIZE) :: buffer
+    integer :: ios, i, check_unit, bytes_read
+    integer :: char_code
     logical :: file_exists
 
-    this%is_binary = .false.
-
-    if (this%source_type == SOURCE_STDIN) return
+    is_binary = .false.
 
     ! Open file in stream mode to check for binary content
-    inquire(file=this%filename, exist=file_exists)
+    inquire(file=filename, exist=file_exists)
     if (.not. file_exists) return
 
-    open(newunit=check_unit, file=this%filename, status='old', action='read', &
+    open(newunit=check_unit, file=filename, status='old', action='read', &
          access='stream', form='unformatted', iostat=ios)
     if (ios /= 0) return
+
+    ! Initialize buffer to spaces
+    buffer = ''
 
     read(check_unit, iostat=ios) buffer
     close(check_unit)
 
-    if (ios /= 0 .and. ios /= iostat_end) return
+    ! Determine how many bytes were actually read
+    bytes_read = CHECK_SIZE
+    if (ios == iostat_end) then
+      ! File was smaller than buffer - find actual length
+      do i = CHECK_SIZE, 1, -1
+        if (buffer(i:i) /= char(0)) then
+          bytes_read = i
+          exit
+        end if
+      end do
+    else if (ios /= 0) then
+      return
+    end if
 
-    ! Check for NUL bytes
-    do i = 1, len_trim(buffer)
-      if (ichar(buffer(i:i)) == 0) then
-        this%is_binary = .true.
+    ! Check each byte for binary indicators
+    do i = 1, bytes_read
+      char_code = ichar(buffer(i:i))
+
+      ! NUL byte is definitive binary indicator
+      if (char_code == 0) then
+        is_binary = .true.
+        return
+      end if
+
+      ! Non-printable control chars (except common text ones)
+      ! Allow: tab (9), newline (10), carriage return (13), form feed (12)
+      if (char_code < 32 .and. char_code /= 9 .and. char_code /= 10 &
+          .and. char_code /= 13 .and. char_code /= 12) then
+        is_binary = .true.
         return
       end if
     end do
+
+  end function check_binary_file
+
+  subroutine source_check_binary(this)
+    !> Check if the source is binary (wrapper that calls check_binary_file)
+    !> NOTE: This only works if called BEFORE the file is opened
+    class(input_source), intent(inout) :: this
+
+    this%is_binary = .false.
+    if (this%source_type == SOURCE_STDIN) return
+
+    this%is_binary = check_binary_file(trim(this%filename))
 
   end subroutine source_check_binary
 

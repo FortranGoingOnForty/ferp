@@ -3,6 +3,7 @@ module ferp_output
   use ferp_kinds
   use ferp_options
   use, intrinsic :: iso_fortran_env, only: output_unit, error_unit
+  use, intrinsic :: iso_c_binding, only: c_int
   implicit none
   private
 
@@ -10,6 +11,16 @@ module ferp_output
   public :: print_context_line, print_separator
   public :: print_binary_match, print_only_match
   public :: print_match_colored
+  public :: stdout_is_tty
+
+  ! C interface for isatty
+  interface
+    function c_isatty(fd) bind(C, name="isatty")
+      import :: c_int
+      integer(c_int), value :: fd
+      integer(c_int) :: c_isatty
+    end function c_isatty
+  end interface
 
   ! ANSI color codes
   character(len=*), parameter :: COLOR_MATCH = char(27) // '[01;31m'  ! Bold red
@@ -19,6 +30,14 @@ module ferp_output
   character(len=*), parameter :: COLOR_SEP = char(27) // '[36m'       ! Cyan
 
 contains
+
+  function stdout_is_tty() result(is_tty)
+    !> Check if stdout is a terminal (for --color=auto)
+    logical :: is_tty
+    integer(c_int), parameter :: STDOUT_FILENO = 1
+
+    is_tty = (c_isatty(STDOUT_FILENO) /= 0)
+  end function stdout_is_tty
 
   subroutine print_match(line, filename, line_num, byte_off, opts)
     !> Print a matching line with appropriate prefixes
@@ -214,7 +233,13 @@ contains
 
     if (opts%quiet) return
 
-    use_color = (opts%color_mode == COLOR_ALWAYS)
+    ! Determine if we should use color
+    use_color = .false.
+    if (opts%color_mode == COLOR_ALWAYS) then
+      use_color = .true.
+    else if (opts%color_mode == COLOR_AUTO) then
+      use_color = stdout_is_tty()
+    end if
 
     ! Print filename prefix
     if (opts%show_filename .and. .not. opts%hide_filename) then

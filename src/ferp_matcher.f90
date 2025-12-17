@@ -379,11 +379,11 @@ contains
     integer :: match_ends(MAX_MATCHES_PER_LINE)
     integer :: num_matches, j
 
-    ! For context lines
+    ! For context lines (SAVE used for large arrays - safe since not recursive/concurrent)
     integer, parameter :: MAX_CONTEXT = 100
-    character(len=max_line_len) :: before_buffer(MAX_CONTEXT)
-    integer :: before_line_nums(MAX_CONTEXT)
-    integer(i64) :: before_byte_offs(MAX_CONTEXT)
+    character(len=max_line_len), save :: before_buffer(MAX_CONTEXT)
+    integer, save :: before_line_nums(MAX_CONTEXT)
+    integer(i64), save :: before_byte_offs(MAX_CONTEXT)
     integer :: buf_start, buf_count, buf_idx
     integer :: after_remaining  ! Lines of after-context still to print
     integer :: last_printed_line  ! Last line number we printed
@@ -401,13 +401,8 @@ contains
     need_separator = .false.
     use_context = (opts%before_context > 0 .or. opts%after_context > 0)
 
-    ! Check for binary file
-    if (.not. opts%text_mode .and. src%source_type == SOURCE_FILE) then
-      call src%check_binary()
-      if (src%is_binary .and. opts%ignore_binary) then
-        return
-      end if
-    end if
+    ! Note: Binary detection is now done in main.f90 BEFORE opening the file
+    ! src%is_binary is already set by the caller
 
     ! Process lines
     do while (src%read_line(line, line_num, byte_off))
