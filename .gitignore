@@ -1,3 +1,5 @@
 docs/
 .fackr/
 build/
+ferp
+*.mod
