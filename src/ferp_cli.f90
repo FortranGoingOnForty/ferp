@@ -218,36 +218,68 @@ contains
 
         ! Options requiring arguments for directory/device action
         case ('d')
+          if (j < len_trim(optstr)) then
+            call handle_option_argument(opts, patterns, 'd', optstr(j+1:), has_pattern, ierr)
+            return
+          end if
           need_arg = .true.
           pending = 'd'
           return
         case ('D')
+          if (j < len_trim(optstr)) then
+            call handle_option_argument(opts, patterns, 'D', optstr(j+1:), has_pattern, ierr)
+            return
+          end if
           need_arg = .true.
           pending = 'D'
           return
 
         ! Options requiring arguments
         case ('e')
+          if (j < len_trim(optstr)) then
+            call handle_option_argument(opts, patterns, 'e', optstr(j+1:), has_pattern, ierr)
+            return
+          end if
           need_arg = .true.
           pending = 'e'
-          return  ! Rest of optstr is handled as argument or next arg
+          return
         case ('f')
+          if (j < len_trim(optstr)) then
+            call handle_option_argument(opts, patterns, 'f', optstr(j+1:), has_pattern, ierr)
+            return
+          end if
           need_arg = .true.
           pending = 'f'
           return
         case ('m')
+          if (j < len_trim(optstr)) then
+            call handle_option_argument(opts, patterns, 'm', optstr(j+1:), has_pattern, ierr)
+            return
+          end if
           need_arg = .true.
           pending = 'm'
           return
         case ('A')
+          if (j < len_trim(optstr)) then
+            call handle_option_argument(opts, patterns, 'A', optstr(j+1:), has_pattern, ierr)
+            return
+          end if
           need_arg = .true.
           pending = 'A'
           return
         case ('B')
+          if (j < len_trim(optstr)) then
+            call handle_option_argument(opts, patterns, 'B', optstr(j+1:), has_pattern, ierr)
+            return
+          end if
           need_arg = .true.
           pending = 'B'
           return
         case ('C')
+          if (j < len_trim(optstr)) then
+            call handle_option_argument(opts, patterns, 'C', optstr(j+1:), has_pattern, ierr)
+            return
+          end if
           need_arg = .true.
           pending = 'C'
           return
@@ -384,21 +416,30 @@ contains
         opts%dereference_recursive = .true.
       case ('include')
         if (eq_pos > 0) then
-          opts%include_glob = trim(opt_value)
+          if (opts%num_include_globs < MAX_GLOBS) then
+            opts%num_include_globs = opts%num_include_globs + 1
+            opts%include_globs(opts%num_include_globs) = trim(opt_value)
+          end if
         else
           need_arg = .true.
           pending = 'include'
         end if
       case ('exclude')
         if (eq_pos > 0) then
-          opts%exclude_glob = trim(opt_value)
+          if (opts%num_exclude_globs < MAX_GLOBS) then
+            opts%num_exclude_globs = opts%num_exclude_globs + 1
+            opts%exclude_globs(opts%num_exclude_globs) = trim(opt_value)
+          end if
         else
           need_arg = .true.
           pending = 'exclude'
         end if
       case ('exclude-dir')
         if (eq_pos > 0) then
-          opts%exclude_dir = trim(opt_value)
+          if (opts%num_exclude_dirs < MAX_GLOBS) then
+            opts%num_exclude_dirs = opts%num_exclude_dirs + 1
+            opts%exclude_dirs(opts%num_exclude_dirs) = trim(opt_value)
+          end if
         else
           need_arg = .true.
           pending = 'exclude-dir'
@@ -577,11 +618,20 @@ contains
       case ('group-separator')
         opts%group_separator = arg(1:min(len_trim(arg), 8))
       case ('include')
-        opts%include_glob = trim(arg)
+        if (opts%num_include_globs < MAX_GLOBS) then
+          opts%num_include_globs = opts%num_include_globs + 1
+          opts%include_globs(opts%num_include_globs) = trim(arg)
+        end if
       case ('exclude')
-        opts%exclude_glob = trim(arg)
+        if (opts%num_exclude_globs < MAX_GLOBS) then
+          opts%num_exclude_globs = opts%num_exclude_globs + 1
+          opts%exclude_globs(opts%num_exclude_globs) = trim(arg)
+        end if
       case ('exclude-dir')
-        opts%exclude_dir = trim(arg)
+        if (opts%num_exclude_dirs < MAX_GLOBS) then
+          opts%num_exclude_dirs = opts%num_exclude_dirs + 1
+          opts%exclude_dirs(opts%num_exclude_dirs) = trim(arg)
+        end if
       case ('exclude-from')
         opts%exclude_from_file = trim(arg)
       case ('include-from')

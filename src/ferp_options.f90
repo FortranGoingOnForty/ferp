@@ -9,6 +9,7 @@ module ferp_options
   public :: COLOR_NEVER, COLOR_AUTO, COLOR_ALWAYS
   public :: DIR_READ, DIR_SKIP, DIR_RECURSE
   public :: DEV_READ, DEV_SKIP
+  public :: MAX_GLOBS
 
   !> Pattern type constants
   integer, parameter :: PATTERN_BRE = 1
@@ -29,6 +30,9 @@ module ferp_options
   !> Device action constants
   integer, parameter :: DEV_READ = 0
   integer, parameter :: DEV_SKIP = 1
+
+  !> Max glob patterns
+  integer, parameter :: MAX_GLOBS = 64
 
   type :: grep_options
     !> Pattern type selection
@@ -65,9 +69,12 @@ module ferp_options
     !> File selection
     logical :: recursive = .false.         ! -r, --recursive
     logical :: dereference_recursive = .false. ! -R, --dereference-recursive
-    character(len=max_path_len) :: include_glob = ''
-    character(len=max_path_len) :: exclude_glob = ''
-    character(len=max_path_len) :: exclude_dir = ''
+    character(len=max_path_len) :: include_globs(MAX_GLOBS) = ''
+    integer :: num_include_globs = 0
+    character(len=max_path_len) :: exclude_globs(MAX_GLOBS) = ''
+    integer :: num_exclude_globs = 0
+    character(len=max_path_len) :: exclude_dirs(MAX_GLOBS) = ''
+    integer :: num_exclude_dirs = 0
     character(len=max_path_len) :: exclude_from_file = ''
     character(len=max_path_len) :: include_from_file = ''
 

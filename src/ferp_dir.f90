@@ -90,16 +90,20 @@ contains
   end function is_regular_file
 
   subroutine collect_files(start_path, file_list, num_files, recursive, &
-                           follow_links, include_glob, exclude_glob, exclude_dir)
+                           follow_links, include_globs, num_include, &
+                           exclude_globs, num_exclude, exclude_dirs, num_exclude_dirs)
     !> Collect files from a path, optionally recursively
     character(len=*), intent(in) :: start_path
     character(len=max_path_len), intent(out) :: file_list(:)
     integer, intent(out) :: num_files
     logical, intent(in) :: recursive
     logical, intent(in) :: follow_links
-    character(len=*), intent(in) :: include_glob
-    character(len=*), intent(in) :: exclude_glob
-    character(len=*), intent(in) :: exclude_dir
+    character(len=max_path_len), intent(in) :: include_globs(:)
+    integer, intent(in) :: num_include
+    character(len=max_path_len), intent(in) :: exclude_globs(:)
+    integer, intent(in) :: num_exclude
+    character(len=max_path_len), intent(in) :: exclude_dirs(:)
+    integer, intent(in) :: num_exclude_dirs
 
     ! SAVE used for large array - safe since not recursive/concurrent
     integer, parameter :: MAX_DEPTH = 100
@@ -114,7 +118,8 @@ contains
     ! Check if start_path is a file or directory
     if (.not. is_directory(start_path)) then
       ! It's a file, just add it if it passes filters
-      if (should_include_file(start_path, include_glob, exclude_glob)) then
+      if (should_include_file_multi(start_path, include_globs, num_include, &
+                                    exclude_globs, num_exclude)) then
         num_files = 1
         file_list(1) = start_path
       end if
@@ -156,9 +161,9 @@ contains
         ! Check if it's a directory
         if (is_directory(entry_path)) then
           if (recursive) then
-            ! Check exclude-dir pattern
-            if (len_trim(exclude_dir) > 0) then
-              if (glob_match(trim(entry_name), trim(exclude_dir))) cycle
+            ! Check exclude-dir patterns
+            if (num_exclude_dirs > 0) then
+              if (matches_any_pattern(trim(entry_name), exclude_dirs, num_exclude_dirs)) cycle
             end if
 
             ! Push to stack for later processing
@@ -169,7 +174,8 @@ contains
           end if
         else
           ! It's a file - check filters and add
-          if (should_include_file(entry_path, include_glob, exclude_glob)) then
+          if (should_include_file_multi(entry_path, include_globs, num_include, &
+                                        exclude_globs, num_exclude)) then
             if (num_files < size(file_list)) then
               num_files = num_files + 1
               file_list(num_files) = entry_path
@@ -259,6 +265,54 @@ contains
     end if
 
   end function should_include_file
+
+  function should_include_file_multi(filepath, include_globs, num_include, &
+                                     exclude_globs, num_exclude) result(include)
+    !> Check if file should be included based on multiple glob patterns
+    character(len=*), intent(in) :: filepath
+    character(len=max_path_len), intent(in) :: include_globs(:)
+    integer, intent(in) :: num_include
+    character(len=max_path_len), intent(in) :: exclude_globs(:)
+    integer, intent(in) :: num_exclude
+    logical :: include
+
+    character(len=max_path_len) :: basename
+    integer :: i
+
+    include = .true.
+
+    ! Extract basename
+    basename = filepath
+    do i = len_trim(filepath), 1, -1
+      if (filepath(i:i) == '/') then
+        basename = filepath(i+1:)
+        exit
+      end if
+    end do
+
+    ! Check include patterns (if any specified, file must match at least one)
+    if (num_include > 0) then
+      include = .false.
+      do i = 1, num_include
+        if (glob_match(trim(basename), trim(include_globs(i)))) then
+          include = .true.
+          exit
+        end if
+      end do
+      if (.not. include) return
+    end if
+
+    ! Check exclude patterns (if any match, exclude the file)
+    if (num_exclude > 0) then
+      do i = 1, num_exclude
+        if (glob_match(trim(basename), trim(exclude_globs(i)))) then
+          include = .false.
+          return
+        end if
+      end do
+    end if
+
+  end function should_include_file_multi
 
   recursive function glob_match(str, pattern) result(matches)
     !> Simple glob pattern matching (* and ? wildcards)

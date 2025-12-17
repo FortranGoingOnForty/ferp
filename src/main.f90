@@ -77,8 +77,9 @@ program ferp
     do i = 1, size(files)
       call collect_files(trim(files(i)), collected_files, num_collected, &
                          .true., opts%dereference_recursive, &
-                         trim(opts%include_glob), trim(opts%exclude_glob), &
-                         trim(opts%exclude_dir))
+                         opts%include_globs, opts%num_include_globs, &
+                         opts%exclude_globs, opts%num_exclude_globs, &
+                         opts%exclude_dirs, opts%num_exclude_dirs)
       do j = 1, num_collected
         call append_file_to_list(expanded_files, collected_files(j))
       end do
