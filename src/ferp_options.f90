@@ -68,6 +68,8 @@ module ferp_options
     character(len=max_path_len) :: include_glob = ''
     character(len=max_path_len) :: exclude_glob = ''
     character(len=max_path_len) :: exclude_dir = ''
+    character(len=max_path_len) :: exclude_from_file = ''
+    character(len=max_path_len) :: include_from_file = ''
 
     !> Binary file handling
     logical :: text_mode = .false.         ! -a, --text

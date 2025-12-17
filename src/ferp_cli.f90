@@ -209,6 +209,8 @@ contains
           opts%text_mode = .true.
         case ('I')
           opts%ignore_binary = .true.
+        case ('U')
+          opts%text_mode = .false.
 
         ! Null-data mode
         case ('z')
@@ -304,6 +306,8 @@ contains
       ! Matching control
       case ('ignore-case')
         opts%ignore_case = .true.
+      case ('no-ignore-case')
+        opts%ignore_case = .false.
       case ('invert-match')
         opts%invert_match = .true.
       case ('word-regexp')
@@ -390,6 +394,20 @@ contains
           need_arg = .true.
           pending = 'exclude-dir'
         end if
+      case ('exclude-from')
+        if (eq_pos > 0) then
+          opts%exclude_from_file = trim(opt_value)
+        else
+          need_arg = .true.
+          pending = 'exclude-from'
+        end if
+      case ('include-from')
+        if (eq_pos > 0) then
+          opts%include_from_file = trim(opt_value)
+        else
+          need_arg = .true.
+          pending = 'include-from'
+        end if
 
       ! Pattern specification
       case ('regexp')
@@ -404,6 +422,8 @@ contains
       ! Binary
       case ('text')
         opts%text_mode = .true.
+      case ('binary')
+        opts%text_mode = .false.
 
       ! Color
       case ('color', 'colour')
@@ -551,6 +571,10 @@ contains
         opts%exclude_glob = trim(arg)
       case ('exclude-dir')
         opts%exclude_dir = trim(arg)
+      case ('exclude-from')
+        opts%exclude_from_file = trim(arg)
+      case ('include-from')
+        opts%include_from_file = trim(arg)
       case ('label')
         opts%label = trim(arg)
       case ('binary-files')
@@ -663,6 +687,7 @@ contains
     write(*, '(A)') '  -e, --regexp=PATTERN      use PATTERN for matching'
     write(*, '(A)') '  -f, --file=FILE           obtain PATTERN from FILE'
     write(*, '(A)') '  -i, --ignore-case         ignore case distinctions'
+    write(*, '(A)') '      --no-ignore-case      do not ignore case (default)'
     write(*, '(A)') '  -w, --word-regexp         force PATTERN to match only whole words'
     write(*, '(A)') '  -x, --line-regexp         force PATTERN to match only whole lines'
     write(*, '(A)') ''
@@ -703,12 +728,15 @@ contains
     write(*, '(A)') '  -r, --recursive           equivalent to --directories=recurse'
     write(*, '(A)') '  -R, --dereference-recursive  likewise, but follow all symlinks'
     write(*, '(A)') '      --include=GLOB        search only files that match GLOB'
+    write(*, '(A)') '      --include-from=FILE   read include patterns from FILE'
     write(*, '(A)') '      --exclude=GLOB        skip files that match GLOB'
+    write(*, '(A)') '      --exclude-from=FILE   read exclude patterns from FILE'
     write(*, '(A)') '      --exclude-dir=GLOB    skip directories that match GLOB'
     write(*, '(A)') ''
     write(*, '(A)') 'Binary file handling:'
     write(*, '(A)') '  -a, --text                equivalent to --binary-files=text'
     write(*, '(A)') '  -I                        equivalent to --binary-files=without-match'
+    write(*, '(A)') '  -U, --binary              do not strip CR at EOL (default)'
     write(*, '(A)') '      --binary-files=TYPE   assume binary files are TYPE;'
     write(*, '(A)') '                            TYPE is "binary", "text", or "without-match"'
     write(*, '(A)') ''

@@ -7,6 +7,7 @@ module ferp_dir
 
   public :: is_directory, is_regular_file, collect_files
   public :: glob_match
+  public :: read_patterns_from_file, matches_any_pattern
 
   ! C interfaces for POSIX directory functions
   interface
@@ -331,5 +332,74 @@ contains
     matches = (s > str_len .and. p > pat_len)
 
   end function glob_match
+
+  subroutine read_patterns_from_file(filename, patterns, num_patterns, ierr)
+    !> Read glob patterns from a file, one per line
+    character(len=*), intent(in) :: filename
+    character(len=max_path_len), intent(out) :: patterns(:)
+    integer, intent(out) :: num_patterns
+    integer, intent(out) :: ierr
+
+    integer :: unit_num, ios
+    character(len=max_path_len) :: line
+
+    num_patterns = 0
+    ierr = 0
+
+    open(newunit=unit_num, file=filename, status='old', action='read', iostat=ios)
+    if (ios /= 0) then
+      ierr = 1
+      return
+    end if
+
+    do
+      read(unit_num, '(A)', iostat=ios) line
+      if (ios /= 0) exit
+
+      ! Skip empty lines and comments
+      if (len_trim(line) == 0) cycle
+      if (line(1:1) == '#') cycle
+
+      if (num_patterns < size(patterns)) then
+        num_patterns = num_patterns + 1
+        patterns(num_patterns) = trim(line)
+      end if
+    end do
+
+    close(unit_num)
+
+  end subroutine read_patterns_from_file
+
+  function matches_any_pattern(filename, patterns, num_patterns) result(matches)
+    !> Check if filename matches any pattern in the list
+    character(len=*), intent(in) :: filename
+    character(len=max_path_len), intent(in) :: patterns(:)
+    integer, intent(in) :: num_patterns
+    logical :: matches
+
+    character(len=max_path_len) :: basename
+    integer :: i
+
+    matches = .false.
+    if (num_patterns == 0) return
+
+    ! Extract basename
+    basename = filename
+    do i = len_trim(filename), 1, -1
+      if (filename(i:i) == '/') then
+        basename = filename(i+1:)
+        exit
+      end if
+    end do
+
+    ! Check against each pattern
+    do i = 1, num_patterns
+      if (glob_match(trim(basename), trim(patterns(i)))) then
+        matches = .true.
+        return
+      end if
+    end do
+
+  end function matches_any_pattern
 
 end module ferp_dir

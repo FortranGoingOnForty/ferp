@@ -26,13 +26,41 @@ program ferp
   type(compiled_patterns_t) :: compiled
   integer :: ierr, i, j, num_collected
   integer, parameter :: MAX_FILES = 10000
+  integer, parameter :: MAX_PATTERNS = 1000
   character(len=max_path_len) :: collected_files(MAX_FILES)
+  character(len=max_path_len), save :: exclude_patterns(MAX_PATTERNS)
+  character(len=max_path_len), save :: include_patterns(MAX_PATTERNS)
+  integer :: num_exclude_patterns, num_include_patterns
   logical :: any_match, file_match
 
   ! Parse command-line arguments
   call parse_arguments(opts, patterns, files, ierr)
   if (ierr /= 0) then
     call c_exit(2_c_int)
+  end if
+
+  ! Read exclude patterns from file if specified
+  num_exclude_patterns = 0
+  if (len_trim(opts%exclude_from_file) > 0) then
+    call read_patterns_from_file(trim(opts%exclude_from_file), exclude_patterns, &
+                                 num_exclude_patterns, ierr)
+    if (ierr /= 0) then
+      write(error_unit, '(A)') 'ferp: ' // trim(opts%exclude_from_file) // &
+                               ': No such file or directory'
+      call c_exit(2_c_int)
+    end if
+  end if
+
+  ! Read include patterns from file if specified
+  num_include_patterns = 0
+  if (len_trim(opts%include_from_file) > 0) then
+    call read_patterns_from_file(trim(opts%include_from_file), include_patterns, &
+                                 num_include_patterns, ierr)
+    if (ierr /= 0) then
+      write(error_unit, '(A)') 'ferp: ' // trim(opts%include_from_file) // &
+                               ': No such file or directory'
+      call c_exit(2_c_int)
+    end if
   end if
 
   ! Handle recursive mode - expand directories to file lists
@@ -108,6 +136,20 @@ program ferp
           case default  ! DIR_READ
             ! Will try to read directory as file (usually fails)
         end select
+      end if
+
+      ! Check include patterns from file
+      if (num_include_patterns > 0) then
+        if (.not. matches_any_pattern(trim(files(i)), include_patterns, num_include_patterns)) then
+          cycle
+        end if
+      end if
+
+      ! Check exclude patterns from file
+      if (num_exclude_patterns > 0) then
+        if (matches_any_pattern(trim(files(i)), exclude_patterns, num_exclude_patterns)) then
+          cycle
+        end if
       end if
 
       ! Check for binary file BEFORE opening
