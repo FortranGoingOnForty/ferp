@@ -167,6 +167,7 @@ test: $(TARGET)
 	@printf "a\nb\nmatch\nd\ne\n" | ./ferp -A 2 "match" | wc -l | grep -q "3" && echo "PASS: -A after context"
 	@printf "a\nb\nmatch\nd\ne\n" | ./ferp -B 2 "match" | wc -l | grep -q "3" && echo "PASS: -B before context"
 	@printf "a\nb\nmatch\nd\ne\n" | ./ferp -C 1 "match" | wc -l | grep -q "3" && echo "PASS: -C both context"
+	@printf "a\nb\nmatch\nd\ne\n" | ./ferp -2 "match" | wc -l | grep -q "5" && echo "PASS: -NUM context shorthand"
 	@echo "=== Edge case tests ==="
 	@echo "" | ./ferp "" && echo "PASS: empty pattern on empty"
 	@echo "hello" | ./ferp "" && echo "PASS: empty pattern matches"

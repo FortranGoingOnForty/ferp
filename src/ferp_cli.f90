@@ -83,6 +83,10 @@ contains
                                    has_explicit_pattern, need_arg, pending_option, ierr)
             if (ierr /= 0) return
           end if
+        else if (is_numeric_option(arg(2:))) then
+          ! -NUM shorthand for context (e.g., -3 = -C 3)
+          call handle_numeric_context(opts, arg(2:), ierr)
+          if (ierr /= 0) return
         else
           ! Short option(s)
           call parse_short_options(opts, patterns, arg(2:), &
@@ -811,5 +815,43 @@ contains
     write(*, '(A)') 'ferp (Fortran Expression Regular Print) ' // VERSION
     write(*, '(A)') 'Written in Modern Fortran.'
   end subroutine print_version
+
+  function is_numeric_option(str) result(is_num)
+    !> Check if string is all digits (for -NUM context shorthand)
+    character(len=*), intent(in) :: str
+    logical :: is_num
+    integer :: i, ic
+
+    is_num = .false.
+    if (len_trim(str) == 0) return
+
+    do i = 1, len_trim(str)
+      ic = ichar(str(i:i))
+      if (ic < ichar('0') .or. ic > ichar('9')) return
+    end do
+
+    is_num = .true.
+  end function is_numeric_option
+
+  subroutine handle_numeric_context(opts, numstr, ierr)
+    !> Handle -NUM shorthand for context lines (e.g., -3 = -C 3)
+    type(grep_options), intent(inout) :: opts
+    character(len=*), intent(in) :: numstr
+    integer, intent(out) :: ierr
+
+    integer :: num, ios
+
+    ierr = 0
+    read(numstr, *, iostat=ios) num
+
+    if (ios /= 0 .or. num < 0) then
+      write(error_unit, '(A)') 'ferp: invalid context length: ' // trim(numstr)
+      ierr = 2
+      return
+    end if
+
+    opts%before_context = num
+    opts%after_context = num
+  end subroutine handle_numeric_context
 
 end module ferp_cli
