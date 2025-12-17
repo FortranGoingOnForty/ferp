@@ -160,7 +160,7 @@ contains
           opts%pattern_type = PATTERN_PERL
 
         ! Matching control
-        case ('i')
+        case ('i', 'y')  ! -y is obsolete synonym for -i
           opts%ignore_case = .true.
         case ('v')
           opts%invert_match = .true.
@@ -366,6 +366,15 @@ contains
           need_arg = .true.
           pending = 'context'
         end if
+      case ('group-separator')
+        if (eq_pos > 0) then
+          opts%group_separator = opt_value(1:min(len(opt_value), 8))
+        else
+          need_arg = .true.
+          pending = 'group-separator'
+        end if
+      case ('no-group-separator')
+        opts%no_group_separator = .true.
 
       ! File selection
       case ('recursive')
@@ -565,6 +574,8 @@ contains
       case ('C', 'context')
         read(arg, *, iostat=ierr) opts%before_context
         opts%after_context = opts%before_context
+      case ('group-separator')
+        opts%group_separator = arg(1:min(len_trim(arg), 8))
       case ('include')
         opts%include_glob = trim(arg)
       case ('exclude')
@@ -720,6 +731,8 @@ contains
     write(*, '(A)') '  -B, --before-context=NUM  print NUM lines of leading context'
     write(*, '(A)') '  -A, --after-context=NUM   print NUM lines of trailing context'
     write(*, '(A)') '  -C, --context=NUM         print NUM lines of output context'
+    write(*, '(A)') '      --group-separator=SEP use SEP as group separator (default: --)'
+    write(*, '(A)') '      --no-group-separator  suppress group separator'
     write(*, '(A)') ''
     write(*, '(A)') 'File selection:'
     write(*, '(A)') '  -d, --directories=ACTION  how to handle directories;'
