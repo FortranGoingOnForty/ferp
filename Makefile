@@ -12,6 +12,12 @@ FFLAGS_RELEASE = $(FFLAGS_COMMON) -O2 -march=native
 # Default to debug build
 FFLAGS = $(FFLAGS_DEBUG)
 
+# PCRE2 library (required for -P option)
+# Use pkg-config if available, otherwise fall back to defaults
+PCRE2_CFLAGS := $(shell pkg-config --cflags libpcre2-8 2>/dev/null)
+PCRE2_LIBS := $(shell pkg-config --libs libpcre2-8 2>/dev/null || echo "-lpcre2-8")
+LDFLAGS = $(PCRE2_LIBS)
+
 # Directories
 SRC_DIR = src
 REGEX_DIR = src/regex
@@ -27,7 +33,8 @@ REGEX_SRCS = $(REGEX_DIR)/regex_types.f90 \
              $(REGEX_DIR)/regex_parser.f90 \
              $(REGEX_DIR)/regex_nfa.f90 \
              $(REGEX_DIR)/regex_engine.f90 \
-             $(REGEX_DIR)/regex_api.f90
+             $(REGEX_DIR)/regex_api.f90 \
+             $(REGEX_DIR)/pcre_api.f90
 
 # Main source files (in dependency order)
 MAIN_SRCS = $(SRC_DIR)/ferp_kinds.f90 \
@@ -64,7 +71,7 @@ $(BUILD_DIR):
 
 # Link target
 $(TARGET): $(BUILD_DIR) $(OBJS)
-	$(FC) $(FFLAGS) -o $@ $(OBJS)
+	$(FC) $(FFLAGS) -o $@ $(OBJS) $(LDFLAGS)
 
 # Compile regex source files
 $(BUILD_DIR)/%.o: $(REGEX_DIR)/%.f90 | $(BUILD_DIR)
@@ -80,6 +87,7 @@ $(BUILD_DIR)/regex_parser.o: $(BUILD_DIR)/regex_types.o
 $(BUILD_DIR)/regex_nfa.o: $(BUILD_DIR)/regex_types.o $(BUILD_DIR)/regex_parser.o
 $(BUILD_DIR)/regex_engine.o: $(BUILD_DIR)/regex_types.o
 $(BUILD_DIR)/regex_api.o: $(BUILD_DIR)/regex_types.o $(BUILD_DIR)/regex_lexer.o $(BUILD_DIR)/regex_parser.o $(BUILD_DIR)/regex_nfa.o $(BUILD_DIR)/regex_engine.o
+$(BUILD_DIR)/pcre_api.o:
 
 # Main module dependencies
 $(BUILD_DIR)/ferp_options.o: $(BUILD_DIR)/ferp_kinds.o
@@ -87,7 +95,7 @@ $(BUILD_DIR)/ferp_io.o: $(BUILD_DIR)/ferp_kinds.o
 $(BUILD_DIR)/ferp_output.o: $(BUILD_DIR)/ferp_kinds.o $(BUILD_DIR)/ferp_options.o
 $(BUILD_DIR)/ferp_dir.o: $(BUILD_DIR)/ferp_kinds.o
 $(BUILD_DIR)/ferp_cli.o: $(BUILD_DIR)/ferp_kinds.o $(BUILD_DIR)/ferp_options.o
-$(BUILD_DIR)/ferp_matcher.o: $(BUILD_DIR)/ferp_kinds.o $(BUILD_DIR)/ferp_options.o $(BUILD_DIR)/ferp_io.o $(BUILD_DIR)/ferp_output.o $(BUILD_DIR)/regex_api.o
+$(BUILD_DIR)/ferp_matcher.o: $(BUILD_DIR)/ferp_kinds.o $(BUILD_DIR)/ferp_options.o $(BUILD_DIR)/ferp_io.o $(BUILD_DIR)/ferp_output.o $(BUILD_DIR)/regex_api.o $(BUILD_DIR)/pcre_api.o
 $(BUILD_DIR)/main.o: $(BUILD_DIR)/ferp_kinds.o $(BUILD_DIR)/ferp_options.o $(BUILD_DIR)/ferp_cli.o $(BUILD_DIR)/ferp_io.o $(BUILD_DIR)/ferp_dir.o $(BUILD_DIR)/ferp_matcher.o
 
 # Clean build artifacts
@@ -180,6 +188,16 @@ test: $(TARGET)
 	@./ferp --color=always "module" src/ferp_kinds.f90 | grep -q '\[01;31m' && echo "PASS: --color=always outputs ANSI"
 	@./ferp --color=never "module" src/ferp_kinds.f90 | grep -qv '\[01;31m' && echo "PASS: --color=never no ANSI"
 	@./ferp --color=auto "module" src/ferp_kinds.f90 | grep -qv '\[01;31m' && echo "PASS: --color=auto no ANSI when piped"
+	@echo "=== PCRE tests ==="
+	@echo "hello world" | ./ferp -P "hello" | grep -q "hello" && echo "PASS: -P basic match"
+	@echo "foobar" | ./ferp -P 'foo(?=bar)' | grep -q "foobar" && echo "PASS: -P positive lookahead"
+	@echo "foobaz" | ./ferp -P 'foo(?!bar)' | grep -q "foobaz" && echo "PASS: -P negative lookahead"
+	@echo "foobar" | ./ferp -P '(?<=foo)bar' | grep -q "foobar" && echo "PASS: -P positive lookbehind"
+	@echo "bazbar" | ./ferp -P '(?<!foo)bar' | grep -q "bazbar" && echo "PASS: -P negative lookbehind"
+	@echo "abcabc" | ./ferp -P '(?:abc)+' | grep -q "abcabc" && echo "PASS: -P non-capturing group"
+	@echo "test123" | ./ferp -P '\d+' | grep -q "test123" && echo "PASS: -P digit class"
+	@echo "test123more456" | ./ferp -P -o '\d+' | head -1 | grep -q "123" && echo "PASS: -P -o only matching"
+	@echo "HELLO" | ./ferp -P -i 'hello' | grep -q "HELLO" && echo "PASS: -P -i case insensitive"
 	@echo "=== All tests complete! ==="
 
 # Help

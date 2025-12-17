@@ -5,6 +5,7 @@ module ferp_matcher
   use ferp_io
   use ferp_output
   use regex_api
+  use pcre_api
   implicit none
   private
 
@@ -16,8 +17,10 @@ module ferp_matcher
   !> Holds compiled regex patterns for reuse
   type :: compiled_patterns_t
     type(regex_t), allocatable :: regexes(:)
+    type(pcre_t), allocatable :: pcres(:)       ! PCRE compiled patterns
     integer :: count = 0
     logical :: compiled = .false.
+    logical :: is_pcre = .false.                ! True if using PCRE
   end type compiled_patterns_t
 
 contains
@@ -36,6 +39,37 @@ contains
     ierr = 0
     n = size(patterns)
     compiled%count = n
+    compiled%is_pcre = (opts%pattern_type == PATTERN_PERL)
+
+    ! Use PCRE for Perl-compatible patterns
+    if (compiled%is_pcre) then
+      allocate(compiled%pcres(n))
+
+      do i = 1, n
+        pattern = patterns(i)
+
+        ! Apply -w (word) transformation using PCRE word boundaries
+        if (opts%word_regexp) then
+          pattern = '\b' // trim(pattern) // '\b'
+        end if
+
+        ! Apply -x (line) transformation
+        if (opts%line_regexp) then
+          pattern = '^' // trim(pattern) // '$'
+        end if
+
+        call pcre_compile(compiled%pcres(i), trim(pattern), opts%ignore_case, ierr)
+        if (ierr /= 0) then
+          compiled%compiled = .false.
+          return
+        end if
+      end do
+
+      compiled%compiled = .true.
+      return
+    end if
+
+    ! Use Thompson NFA for BRE/ERE
     allocate(compiled%regexes(n))
 
     is_ere = (opts%pattern_type == PATTERN_ERE)
@@ -75,8 +109,17 @@ contains
       end do
       deallocate(compiled%regexes)
     end if
+
+    if (allocated(compiled%pcres)) then
+      do i = 1, compiled%count
+        call pcre_free(compiled%pcres(i))
+      end do
+      deallocate(compiled%pcres)
+    end if
+
     compiled%count = 0
     compiled%compiled = .false.
+    compiled%is_pcre = .false.
 
   end subroutine free_patterns
 
@@ -122,12 +165,17 @@ contains
           end if
 
         case (PATTERN_PERL)
-          ! TODO: Implement Perl regex (stretch goal)
-          ! Fall back to BRE for now
-          if (present(compiled) .and. compiled%compiled) then
-            matches = regex_match(compiled%regexes(i), line, opts%ignore_case)
+          ! Use PCRE2 for Perl-compatible regular expressions
+          if (present(compiled) .and. compiled%compiled .and. compiled%is_pcre) then
+            ! ignore_case is handled at compile time for PCRE
+            matches = pcre_match(compiled%pcres(i), line)
           else
-            matches = match_fixed_string(search_line, patterns(i), opts)
+            ! Fallback if PCRE not available (shouldn't happen normally)
+            if (present(compiled) .and. compiled%compiled) then
+              matches = regex_match(compiled%regexes(i), line, opts%ignore_case)
+            else
+              matches = match_fixed_string(search_line, patterns(i), opts)
+            end if
           end if
       end select
 
@@ -286,6 +334,7 @@ contains
 
     integer :: i, pos, line_len
     type(match_result_t) :: res
+    type(pcre_match_result_t) :: pcre_res
     character(len=max_line_len) :: search_line
     character(len=max_pattern_len) :: search_pattern
 
@@ -331,7 +380,35 @@ contains
       return
     end if
 
-    ! For regex mode - try each pattern
+    ! For PCRE mode
+    if (opts%pattern_type == PATTERN_PERL) then
+      if (.not. present(compiled) .or. .not. compiled%compiled .or. .not. compiled%is_pcre) return
+
+      do i = 1, size(patterns)
+        pos = 1
+        do while (pos <= line_len)
+          pcre_res = pcre_search(compiled%pcres(i), line, start_offset=pos)
+          if (.not. pcre_res%matched) exit
+
+          ! Record match
+          if (num_matches < size(match_starts)) then
+            num_matches = num_matches + 1
+            match_starts(num_matches) = pcre_res%match_start
+            match_ends(num_matches) = pcre_res%match_end
+          end if
+
+          ! Move past this match (at least 1 char to avoid infinite loop)
+          if (pcre_res%match_end >= pcre_res%match_start) then
+            pos = pcre_res%match_end + 1
+          else
+            pos = pos + 1  ! Empty match, advance by 1
+          end if
+        end do
+      end do
+      return
+    end if
+
+    ! For BRE/ERE regex mode - try each pattern
     do i = 1, size(patterns)
       if (.not. present(compiled) .or. .not. compiled%compiled) cycle
 
