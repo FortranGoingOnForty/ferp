@@ -75,7 +75,14 @@ contains
     end if
 
     ! Print the line
-    write(output_unit, '(A)') trim(line)
+    if (opts%null_data) then
+      write(output_unit, '(A,A)', advance='no') trim(line), char(0)
+    else
+      write(output_unit, '(A)') trim(line)
+    end if
+
+    ! Line-buffered mode
+    if (opts%line_buffered) flush(output_unit)
 
   end subroutine print_match
 
@@ -114,7 +121,14 @@ contains
     end if
 
     ! Print the line
-    write(output_unit, '(A)') trim(line)
+    if (opts%null_data) then
+      write(output_unit, '(A,A)', advance='no') trim(line), char(0)
+    else
+      write(output_unit, '(A)') trim(line)
+    end if
+
+    ! Line-buffered mode
+    if (opts%line_buffered) flush(output_unit)
 
   end subroutine print_context_line
 
@@ -126,6 +140,9 @@ contains
     if (opts%no_group_separator) return
 
     write(output_unit, '(A)') trim(opts%group_separator)
+
+    ! Line-buffered mode
+    if (opts%line_buffered) flush(output_unit)
 
   end subroutine print_separator
 
@@ -147,6 +164,9 @@ contains
       write(output_unit, '(I0)') count
     end if
 
+    ! Line-buffered mode
+    if (opts%line_buffered) flush(output_unit)
+
   end subroutine print_count
 
   subroutine print_filename(filename, opts)
@@ -162,6 +182,9 @@ contains
       write(output_unit, '(A)') trim(filename)
     end if
 
+    ! Line-buffered mode
+    if (opts%line_buffered) flush(output_unit)
+
   end subroutine print_filename
 
   subroutine print_binary_match(filename, opts)
@@ -172,6 +195,9 @@ contains
     if (opts%quiet) return
 
     write(output_unit, '(A)') 'Binary file ' // trim(filename) // ' matches'
+
+    ! Line-buffered mode
+    if (opts%line_buffered) flush(output_unit)
 
   end subroutine print_binary_match
 
@@ -212,8 +238,15 @@ contains
 
     ! Print just the matched portion
     if (match_start >= 1 .and. match_end >= match_start .and. match_end <= len(line)) then
-      write(output_unit, '(A)') line(match_start:match_end)
+      if (opts%null_data) then
+        write(output_unit, '(A,A)', advance='no') line(match_start:match_end), char(0)
+      else
+        write(output_unit, '(A)') line(match_start:match_end)
+      end if
     end if
+
+    ! Line-buffered mode
+    if (opts%line_buffered) flush(output_unit)
 
   end subroutine print_only_match
 
@@ -307,14 +340,29 @@ contains
       end do
       ! Print text after last match
       if (pos <= line_len) then
-        write(output_unit, '(A)') line(pos:line_len)
+        if (opts%null_data) then
+          write(output_unit, '(A,A)', advance='no') line(pos:line_len), char(0)
+        else
+          write(output_unit, '(A)') line(pos:line_len)
+        end if
       else
-        write(output_unit, '(A)') ''
+        if (opts%null_data) then
+          write(output_unit, '(A)', advance='no') char(0)
+        else
+          write(output_unit, '(A)') ''
+        end if
       end if
     else
       ! No color - just print the line
-      write(output_unit, '(A)') trim(line)
+      if (opts%null_data) then
+        write(output_unit, '(A,A)', advance='no') trim(line), char(0)
+      else
+        write(output_unit, '(A)') trim(line)
+      end if
     end if
+
+    ! Line-buffered mode
+    if (opts%line_buffered) flush(output_unit)
 
   end subroutine print_match_colored
 

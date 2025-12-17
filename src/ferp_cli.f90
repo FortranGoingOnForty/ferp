@@ -210,6 +210,20 @@ contains
         case ('I')
           opts%ignore_binary = .true.
 
+        ! Null-data mode
+        case ('z')
+          opts%null_data = .true.
+
+        ! Options requiring arguments for directory/device action
+        case ('d')
+          need_arg = .true.
+          pending = 'd'
+          return
+        case ('D')
+          need_arg = .true.
+          pending = 'D'
+          return
+
         ! Options requiring arguments
         case ('e')
           need_arg = .true.
@@ -415,6 +429,81 @@ contains
           pending = 'max-count'
         end if
 
+      ! Label for stdin
+      case ('label')
+        if (eq_pos > 0) then
+          opts%label = trim(opt_value)
+        else
+          need_arg = .true.
+          pending = 'label'
+        end if
+
+      ! Binary file handling
+      case ('binary-files')
+        if (eq_pos > 0) then
+          select case (trim(opt_value))
+            case ('binary')
+              opts%text_mode = .false.
+              opts%ignore_binary = .false.
+            case ('without-match')
+              opts%ignore_binary = .true.
+            case ('text')
+              opts%text_mode = .true.
+            case default
+              write(error_unit, '(A)') "ferp: invalid --binary-files type: " // trim(opt_value)
+              ierr = 2
+              return
+          end select
+        else
+          need_arg = .true.
+          pending = 'binary-files'
+        end if
+
+      ! Output mode
+      case ('line-buffered')
+        opts%line_buffered = .true.
+
+      ! Null-data mode
+      case ('null-data')
+        opts%null_data = .true.
+
+      ! Directory/device action
+      case ('directories')
+        if (eq_pos > 0) then
+          select case (trim(opt_value))
+            case ('read')
+              opts%dir_action = DIR_READ
+            case ('skip')
+              opts%dir_action = DIR_SKIP
+            case ('recurse')
+              opts%dir_action = DIR_RECURSE
+              opts%recursive = .true.
+            case default
+              write(error_unit, '(A)') "ferp: invalid --directories action: " // trim(opt_value)
+              ierr = 2
+              return
+          end select
+        else
+          need_arg = .true.
+          pending = 'directories'
+        end if
+      case ('devices')
+        if (eq_pos > 0) then
+          select case (trim(opt_value))
+            case ('read')
+              opts%dev_action = DEV_READ
+            case ('skip')
+              opts%dev_action = DEV_SKIP
+            case default
+              write(error_unit, '(A)') "ferp: invalid --devices action: " // trim(opt_value)
+              ierr = 2
+              return
+          end select
+        else
+          need_arg = .true.
+          pending = 'devices'
+        end if
+
       ! Help/version
       case ('help')
         call print_help()
@@ -462,6 +551,44 @@ contains
         opts%exclude_glob = trim(arg)
       case ('exclude-dir')
         opts%exclude_dir = trim(arg)
+      case ('label')
+        opts%label = trim(arg)
+      case ('binary-files')
+        select case (trim(arg))
+          case ('binary')
+            opts%text_mode = .false.
+            opts%ignore_binary = .false.
+          case ('without-match')
+            opts%ignore_binary = .true.
+          case ('text')
+            opts%text_mode = .true.
+          case default
+            write(error_unit, '(A)') "ferp: invalid --binary-files type: " // trim(arg)
+            ierr = 2
+        end select
+      case ('d', 'directories')
+        select case (trim(arg))
+          case ('read')
+            opts%dir_action = DIR_READ
+          case ('skip')
+            opts%dir_action = DIR_SKIP
+          case ('recurse')
+            opts%dir_action = DIR_RECURSE
+            opts%recursive = .true.
+          case default
+            write(error_unit, '(A)') "ferp: invalid --directories action: " // trim(arg)
+            ierr = 2
+        end select
+      case ('D', 'devices')
+        select case (trim(arg))
+          case ('read')
+            opts%dev_action = DEV_READ
+          case ('skip')
+            opts%dev_action = DEV_SKIP
+          case default
+            write(error_unit, '(A)') "ferp: invalid --devices action: " // trim(arg)
+            ierr = 2
+        end select
     end select
 
     if (ierr /= 0) then
@@ -556,10 +683,13 @@ contains
     write(*, '(A)') '  -c, --count               print only a count of matching lines per FILE'
     write(*, '(A)') '  -l, --files-with-matches  print only names of FILEs containing matches'
     write(*, '(A)') '  -L, --files-without-match print only names of FILEs containing no match'
+    write(*, '(A)') '      --line-buffered       flush output on every line'
     write(*, '(A)') '      --color[=WHEN]        use markers to highlight the matching strings;'
     write(*, '(A)') '                            WHEN is "always", "never", or "auto"'
+    write(*, '(A)') '      --label=LABEL         use LABEL as the standard input file name'
     write(*, '(A)') '  -T, --initial-tab         make tabs line up (if needed)'
     write(*, '(A)') '  -Z, --null                print 0 byte after FILE name'
+    write(*, '(A)') '  -z, --null-data           treat input/output data as NUL-terminated lines'
     write(*, '(A)') ''
     write(*, '(A)') 'Context control:'
     write(*, '(A)') '  -B, --before-context=NUM  print NUM lines of leading context'
@@ -567,11 +697,20 @@ contains
     write(*, '(A)') '  -C, --context=NUM         print NUM lines of output context'
     write(*, '(A)') ''
     write(*, '(A)') 'File selection:'
-    write(*, '(A)') '  -r, --recursive           search directories recursively'
+    write(*, '(A)') '  -d, --directories=ACTION  how to handle directories;'
+    write(*, '(A)') '                            ACTION is "read", "recurse", or "skip"'
+    write(*, '(A)') '  -D, --devices=ACTION      how to handle devices; ACTION is "read" or "skip"'
+    write(*, '(A)') '  -r, --recursive           equivalent to --directories=recurse'
     write(*, '(A)') '  -R, --dereference-recursive  likewise, but follow all symlinks'
     write(*, '(A)') '      --include=GLOB        search only files that match GLOB'
     write(*, '(A)') '      --exclude=GLOB        skip files that match GLOB'
     write(*, '(A)') '      --exclude-dir=GLOB    skip directories that match GLOB'
+    write(*, '(A)') ''
+    write(*, '(A)') 'Binary file handling:'
+    write(*, '(A)') '  -a, --text                equivalent to --binary-files=text'
+    write(*, '(A)') '  -I                        equivalent to --binary-files=without-match'
+    write(*, '(A)') '      --binary-files=TYPE   assume binary files are TYPE;'
+    write(*, '(A)') '                            TYPE is "binary", "text", or "without-match"'
     write(*, '(A)') ''
     write(*, '(A)') 'Exit status is 0 if any line is selected, 1 otherwise;'
     write(*, '(A)') 'if any error occurs and -q is not given, the exit status is 2.'

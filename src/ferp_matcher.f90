@@ -405,7 +405,13 @@ contains
     ! src%is_binary is already set by the caller
 
     ! Process lines
-    do while (src%read_line(line, line_num, byte_off))
+    do
+      ! Read next line (use null-data mode if enabled)
+      if (opts%null_data) then
+        if (.not. src%read_line_null(line, line_num, byte_off)) exit
+      else
+        if (.not. src%read_line(line, line_num, byte_off)) exit
+      end if
       if (present(compiled)) then
         line_matched = match_line(line, patterns, opts, compiled)
       else

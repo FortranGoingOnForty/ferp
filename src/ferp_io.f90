@@ -21,20 +21,23 @@ module ferp_io
     integer :: line_number = 0
     logical :: is_binary = .false.
     logical :: eof_reached = .false.
+    logical :: null_data_mode = .false.
   contains
     procedure :: open => source_open
     procedure :: close => source_close
     procedure :: read_line => source_read_line
+    procedure :: read_line_null => source_read_line_null
     procedure :: check_binary => source_check_binary
   end type input_source
 
 contains
 
-  function source_open(this, filename, suppress_errors) result(success)
+  function source_open(this, filename, suppress_errors, null_data) result(success)
     !> Open a file or stdin for reading
     class(input_source), intent(inout) :: this
     character(len=*), intent(in) :: filename
     logical, intent(in), optional :: suppress_errors
+    logical, intent(in), optional :: null_data
     logical :: success
 
     integer :: ios
@@ -43,6 +46,9 @@ contains
 
     quiet = .false.
     if (present(suppress_errors)) quiet = suppress_errors
+
+    this%null_data_mode = .false.
+    if (present(null_data)) this%null_data_mode = null_data
 
     success = .false.
 
@@ -65,9 +71,14 @@ contains
     this%source_type = SOURCE_FILE
     this%filename = filename
 
-    ! Open file
-    open(newunit=this%unit_num, file=filename, status='old', action='read', &
-         iostat=ios, iomsg=errmsg)
+    ! Open file - use stream access for null-data mode
+    if (this%null_data_mode) then
+      open(newunit=this%unit_num, file=filename, status='old', action='read', &
+           access='stream', form='unformatted', iostat=ios, iomsg=errmsg)
+    else
+      open(newunit=this%unit_num, file=filename, status='old', action='read', &
+           iostat=ios, iomsg=errmsg)
+    end if
 
     if (ios /= 0) then
       if (.not. quiet) then
@@ -134,6 +145,71 @@ contains
     success = .true.
 
   end function source_read_line
+
+  function source_read_line_null(this, line, line_num, byte_off) result(success)
+    !> Read a NUL-terminated line from the input source (for -z mode)
+    class(input_source), intent(inout) :: this
+    character(len=*), intent(out) :: line
+    integer, intent(out) :: line_num
+    integer(i64), intent(out) :: byte_off
+    logical :: success
+
+    integer :: ios, pos, max_len
+    character(len=1) :: ch
+
+    success = .false.
+    line = ''
+    line_num = 0
+    byte_off = 0
+
+    if (.not. this%is_open .or. this%eof_reached) return
+
+    max_len = len(line)
+    pos = 0
+
+    ! Read byte by byte until NUL or EOF
+    do
+      read(this%unit_num, iostat=ios) ch
+
+      if (ios == iostat_end) then
+        this%eof_reached = .true.
+        if (pos > 0) then
+          ! Return what we have
+          exit
+        else
+          return
+        end if
+      end if
+
+      if (ios /= 0) return
+
+      ! Check for NUL terminator
+      if (ch == char(0)) exit
+
+      ! Skip carriage returns (for Windows line endings in data)
+      if (ch == char(13)) cycle
+
+      ! Convert embedded newlines to space
+      if (ch == char(10)) ch = ' '
+
+      ! Add character to line
+      pos = pos + 1
+      if (pos <= max_len) then
+        line(pos:pos) = ch
+      end if
+    end do
+
+    ! Update state
+    this%line_number = this%line_number + 1
+    line_num = this%line_number
+    byte_off = this%byte_offset
+
+    ! Update byte offset (record length + NUL)
+    this%byte_offset = this%byte_offset + int(pos, i64) + 1_i64
+
+    success = .true.
+
+  end function source_read_line_null
 
   function check_binary_file(filename) result(is_binary)
     !> Check if a file is binary by looking for NUL bytes or non-text chars

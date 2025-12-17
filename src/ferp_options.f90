@@ -7,6 +7,8 @@ module ferp_options
   public :: grep_options
   public :: PATTERN_BRE, PATTERN_ERE, PATTERN_FIXED, PATTERN_PERL
   public :: COLOR_NEVER, COLOR_AUTO, COLOR_ALWAYS
+  public :: DIR_READ, DIR_SKIP, DIR_RECURSE
+  public :: DEV_READ, DEV_SKIP
 
   !> Pattern type constants
   integer, parameter :: PATTERN_BRE = 1
@@ -18,6 +20,15 @@ module ferp_options
   integer, parameter :: COLOR_NEVER = 0
   integer, parameter :: COLOR_AUTO = 1
   integer, parameter :: COLOR_ALWAYS = 2
+
+  !> Directory action constants
+  integer, parameter :: DIR_READ = 0
+  integer, parameter :: DIR_SKIP = 1
+  integer, parameter :: DIR_RECURSE = 2
+
+  !> Device action constants
+  integer, parameter :: DEV_READ = 0
+  integer, parameter :: DEV_SKIP = 1
 
   type :: grep_options
     !> Pattern type selection
@@ -66,6 +77,10 @@ module ferp_options
     integer :: color_mode = COLOR_AUTO     ! --color
     integer :: max_count = 0               ! -m, --max-count (0 = unlimited)
     character(len=max_path_len) :: label = '(standard input)'
+    logical :: line_buffered = .false.     ! --line-buffered
+    logical :: null_data = .false.         ! -z, --null-data
+    integer :: dir_action = DIR_READ       ! -d, --directories
+    integer :: dev_action = DEV_READ       ! -D, --devices
 
     !> Internal state
     logical :: multiple_files = .false.    ! Auto-set when >1 file

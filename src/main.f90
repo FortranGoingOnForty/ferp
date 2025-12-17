@@ -84,7 +84,8 @@ program ferp
   if (size(files) == 0) then
     ! No files specified - read from stdin
     opts%reading_stdin = .true.
-    if (src%open('-')) then
+    if (src%open('-', null_data=opts%null_data)) then
+      src%filename = opts%label  ! Use --label if provided
       if (opts%pattern_type /= PATTERN_FIXED) then
         any_match = process_source(src, patterns, opts, compiled)
       else
@@ -95,6 +96,20 @@ program ferp
   else
     ! Process each file
     do i = 1, size(files)
+      ! Check for directory and handle according to dir_action
+      if (.not. opts%recursive .and. is_directory(trim(files(i)))) then
+        select case (opts%dir_action)
+          case (DIR_SKIP)
+            cycle  ! Skip directories silently
+          case (DIR_RECURSE)
+            ! Enable recursive mode for this directory
+            opts%recursive = .true.
+            opts%dir_action = DIR_RECURSE
+          case default  ! DIR_READ
+            ! Will try to read directory as file (usually fails)
+        end select
+      end if
+
       ! Check for binary file BEFORE opening
       if (.not. opts%text_mode) then
         src%is_binary = check_binary_file(trim(files(i)))
@@ -103,7 +118,7 @@ program ferp
         src%is_binary = .false.
       end if
 
-      if (src%open(trim(files(i)), opts%no_messages)) then
+      if (src%open(trim(files(i)), opts%no_messages, opts%null_data)) then
         if (opts%pattern_type /= PATTERN_FIXED) then
           file_match = process_source(src, patterns, opts, compiled)
         else
