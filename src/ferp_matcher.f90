@@ -11,6 +11,7 @@ module ferp_matcher
   public :: match_line, match_fixed_string
   public :: process_source, to_lower
   public :: compiled_patterns_t, compile_patterns, free_patterns
+  public :: find_matches
 
   !> Holds compiled regex patterns for reuse
   type :: compiled_patterns_t
@@ -273,6 +274,90 @@ contains
 
   end function to_lower
 
+  subroutine find_matches(line, patterns, opts, compiled, match_starts, match_ends, num_matches)
+    !> Find all matches in a line, returning their positions
+    !> For -o mode, this finds all non-overlapping matches
+    character(len=*), intent(in) :: line
+    character(len=max_pattern_len), intent(in) :: patterns(:)
+    type(grep_options), intent(in) :: opts
+    type(compiled_patterns_t), intent(in), optional :: compiled
+    integer, intent(out) :: match_starts(:), match_ends(:)
+    integer, intent(out) :: num_matches
+
+    integer :: i, pos, line_len
+    type(match_result_t) :: res
+    character(len=max_line_len) :: search_line
+    character(len=max_pattern_len) :: search_pattern
+
+    num_matches = 0
+    line_len = len_trim(line)
+    if (line_len == 0) return
+
+    ! For fixed string mode
+    if (opts%pattern_type == PATTERN_FIXED) then
+      if (opts%ignore_case) then
+        search_line = to_lower(line)
+      else
+        search_line = line
+      end if
+
+      do i = 1, size(patterns)
+        if (opts%ignore_case) then
+          search_pattern = to_lower(patterns(i))
+        else
+          search_pattern = patterns(i)
+        end if
+
+        pos = 1
+        do while (pos <= line_len)
+          pos = index(search_line(pos:line_len), trim(search_pattern))
+          if (pos == 0) exit
+
+          ! Adjust for substring offset
+          pos = pos + (pos - 1)
+          if (pos > line_len) exit
+
+          ! Record match
+          if (num_matches < size(match_starts)) then
+            num_matches = num_matches + 1
+            match_starts(num_matches) = pos
+            match_ends(num_matches) = pos + len_trim(search_pattern) - 1
+          end if
+
+          ! Move past this match
+          pos = pos + len_trim(search_pattern)
+        end do
+      end do
+      return
+    end if
+
+    ! For regex mode - try each pattern
+    do i = 1, size(patterns)
+      if (.not. present(compiled) .or. .not. compiled%compiled) cycle
+
+      pos = 1
+      do while (pos <= line_len)
+        res = regex_search(compiled%regexes(i), line(pos:), opts%ignore_case)
+        if (.not. res%matched) exit
+
+        ! Record match (adjust for substring offset)
+        if (num_matches < size(match_starts)) then
+          num_matches = num_matches + 1
+          match_starts(num_matches) = pos + res%match_start - 1
+          match_ends(num_matches) = pos + res%match_end - 1
+        end if
+
+        ! Move past this match (at least 1 char to avoid infinite loop)
+        if (res%match_end >= res%match_start) then
+          pos = pos + res%match_end
+        else
+          pos = pos + 1  ! Empty match, advance by 1
+        end if
+      end do
+    end do
+
+  end subroutine find_matches
+
   function process_source(src, patterns, opts, compiled) result(found_match)
     !> Process a single input source, return true if any matches found
     type(input_source), intent(inout) :: src
@@ -288,9 +373,33 @@ contains
     logical :: line_matched
     logical :: binary_matched
 
+    ! For -o mode
+    integer, parameter :: MAX_MATCHES_PER_LINE = 100
+    integer :: match_starts(MAX_MATCHES_PER_LINE)
+    integer :: match_ends(MAX_MATCHES_PER_LINE)
+    integer :: num_matches, j
+
+    ! For context lines
+    integer, parameter :: MAX_CONTEXT = 100
+    character(len=max_line_len) :: before_buffer(MAX_CONTEXT)
+    integer :: before_line_nums(MAX_CONTEXT)
+    integer(i64) :: before_byte_offs(MAX_CONTEXT)
+    integer :: buf_start, buf_count, buf_idx
+    integer :: after_remaining  ! Lines of after-context still to print
+    integer :: last_printed_line  ! Last line number we printed
+    logical :: need_separator  ! Need to print -- before next output
+    logical :: use_context
+    integer :: k
+
     found_match = .false.
     match_count = 0
     binary_matched = .false.
+    buf_start = 1
+    buf_count = 0
+    after_remaining = 0
+    last_printed_line = 0
+    need_separator = .false.
+    use_context = (opts%before_context > 0 .or. opts%after_context > 0)
 
     ! Check for binary file
     if (.not. opts%text_mode .and. src%source_type == SOURCE_FILE) then
@@ -318,26 +427,115 @@ contains
             call print_binary_match(src%filename, opts)
             binary_matched = .true.
           end if
-          ! Stop processing binary file after first match
           exit
         end if
 
         ! Handle different output modes
         if (opts%quiet) then
-          ! Quiet mode: exit immediately on match
           return
         else if (opts%files_with_matches) then
-          ! -l: print filename and stop processing this file
           call print_filename(src%filename, opts)
           return
+        else if (opts%only_matching) then
+          if (present(compiled)) then
+            call find_matches(line, patterns, opts, compiled, match_starts, match_ends, num_matches)
+          else
+            call find_matches(line, patterns, opts, match_starts=match_starts, &
+                             match_ends=match_ends, num_matches=num_matches)
+          end if
+          do j = 1, num_matches
+            call print_only_match(line, match_starts(j), match_ends(j), &
+                                  src%filename, line_num, byte_off, opts)
+          end do
         else if (.not. opts%count_only .and. .not. opts%files_without_match) then
-          ! Normal mode: print matching line
-          call print_match(line, src%filename, line_num, byte_off, opts)
+          ! Context and normal mode
+          if (use_context) then
+            ! Determine first line we'll print (for separator check)
+            ! It's either the first buffered line or the match line
+            if (buf_count > 0 .and. opts%before_context > 0) then
+              buf_idx = mod(buf_start - 1, buf_count) + 1
+              k = before_line_nums(buf_idx)  ! First buffered line number
+            else
+              k = line_num
+            end if
+
+            ! Print separator if there's a gap between context groups
+            if (need_separator .and. last_printed_line > 0 .and. &
+                k > last_printed_line + 1) then
+              call print_separator(opts)
+            end if
+            need_separator = .true.
+
+            ! Print before-context from buffer (in correct order)
+            if (buf_count > 0 .and. opts%before_context > 0) then
+              do k = 0, buf_count - 1
+                ! Read from buffer in order: oldest to newest
+                buf_idx = mod(buf_start + k - 1, buf_count) + 1
+                if (before_line_nums(buf_idx) > last_printed_line) then
+                  call print_context_line(before_buffer(buf_idx), src%filename, &
+                       before_line_nums(buf_idx), before_byte_offs(buf_idx), opts)
+                  last_printed_line = before_line_nums(buf_idx)
+                end if
+              end do
+              ! Clear buffer after printing
+              buf_count = 0
+              buf_start = 1
+            end if
+          end if
+
+          ! Print the matching line
+          if (line_num > last_printed_line) then
+            ! Get match positions for color highlighting
+            if (opts%color_mode == COLOR_ALWAYS) then
+              if (present(compiled)) then
+                call find_matches(line, patterns, opts, compiled, match_starts, match_ends, num_matches)
+              else
+                call find_matches(line, patterns, opts, match_starts=match_starts, &
+                                 match_ends=match_ends, num_matches=num_matches)
+              end if
+              call print_match_colored(line, src%filename, line_num, byte_off, opts, &
+                                       match_starts, match_ends, num_matches)
+            else
+              call print_match(line, src%filename, line_num, byte_off, opts)
+            end if
+            last_printed_line = line_num
+          end if
+
+          ! Reset after-context counter
+          after_remaining = opts%after_context
         end if
 
         ! Check max count
         if (opts%max_count > 0 .and. match_count >= opts%max_count) then
           exit
+        end if
+
+      else
+        ! Non-matching line
+        if (use_context .and. .not. opts%count_only .and. .not. opts%quiet .and. &
+            .not. opts%files_with_matches .and. .not. opts%files_without_match .and. &
+            .not. opts%only_matching) then
+
+          ! Print as after-context if needed
+          if (after_remaining > 0 .and. line_num > last_printed_line) then
+            call print_context_line(line, src%filename, line_num, byte_off, opts)
+            last_printed_line = line_num
+            after_remaining = after_remaining - 1
+          else if (opts%before_context > 0) then
+            ! Store in before-context buffer (only when not printing after-context)
+            ! Use circular buffer
+            if (buf_count < opts%before_context) then
+              buf_count = buf_count + 1
+              buf_idx = buf_count
+            else
+              ! Buffer is full, overwrite oldest entry
+              buf_idx = buf_start
+              buf_start = mod(buf_start, opts%before_context) + 1
+            end if
+            before_buffer(buf_idx) = line
+            before_line_nums(buf_idx) = line_num
+            before_byte_offs(buf_idx) = byte_off
+          end if
         end if
       end if
     end do
