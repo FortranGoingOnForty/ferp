@@ -4,19 +4,87 @@ module ferp_matcher
   use ferp_options
   use ferp_io
   use ferp_output
+  use regex_api
   implicit none
   private
 
   public :: match_line, match_fixed_string
   public :: process_source, to_lower
+  public :: compiled_patterns_t, compile_patterns, free_patterns
+
+  !> Holds compiled regex patterns for reuse
+  type :: compiled_patterns_t
+    type(regex_t), allocatable :: regexes(:)
+    integer :: count = 0
+    logical :: compiled = .false.
+  end type compiled_patterns_t
 
 contains
 
-  function match_line(line, patterns, opts) result(matches)
+  subroutine compile_patterns(patterns, opts, compiled, ierr)
+    !> Compile all patterns once for reuse
+    character(len=max_pattern_len), intent(in) :: patterns(:)
+    type(grep_options), intent(in) :: opts
+    type(compiled_patterns_t), intent(out) :: compiled
+    integer, intent(out) :: ierr
+
+    integer :: i, n
+    logical :: is_ere
+    character(len=max_pattern_len) :: pattern
+
+    ierr = 0
+    n = size(patterns)
+    compiled%count = n
+    allocate(compiled%regexes(n))
+
+    is_ere = (opts%pattern_type == PATTERN_ERE)
+
+    do i = 1, n
+      pattern = patterns(i)
+
+      ! Apply -w (word) transformation
+      if (opts%word_regexp .and. opts%pattern_type /= PATTERN_FIXED) then
+        pattern = '\<' // trim(pattern) // '\>'
+      end if
+
+      ! Apply -x (line) transformation
+      if (opts%line_regexp .and. opts%pattern_type /= PATTERN_FIXED) then
+        pattern = '^' // trim(pattern) // '$'
+      end if
+
+      call regex_compile(compiled%regexes(i), trim(pattern), is_ere, ierr)
+      if (ierr /= 0) then
+        compiled%compiled = .false.
+        return
+      end if
+    end do
+
+    compiled%compiled = .true.
+
+  end subroutine compile_patterns
+
+  subroutine free_patterns(compiled)
+    !> Free compiled patterns
+    type(compiled_patterns_t), intent(inout) :: compiled
+    integer :: i
+
+    if (allocated(compiled%regexes)) then
+      do i = 1, compiled%count
+        call regex_free(compiled%regexes(i))
+      end do
+      deallocate(compiled%regexes)
+    end if
+    compiled%count = 0
+    compiled%compiled = .false.
+
+  end subroutine free_patterns
+
+  function match_line(line, patterns, opts, compiled) result(matches)
     !> Check if line matches any pattern according to options
     character(len=*), intent(in) :: line
     character(len=max_pattern_len), intent(in) :: patterns(:)
     type(grep_options), intent(in) :: opts
+    type(compiled_patterns_t), intent(in), optional :: compiled
     logical :: matches
 
     integer :: i
@@ -25,8 +93,8 @@ contains
 
     matches = .false.
 
-    ! Prepare line for searching
-    if (opts%ignore_case) then
+    ! Prepare line for searching (for fixed string mode)
+    if (opts%ignore_case .and. opts%pattern_type == PATTERN_FIXED) then
       search_line = to_lower(line)
     else
       search_line = line
@@ -34,24 +102,32 @@ contains
 
     ! Try each pattern
     do i = 1, size(patterns)
-      ! Prepare pattern for searching
-      if (opts%ignore_case) then
-        search_pattern = to_lower(patterns(i))
-      else
-        search_pattern = patterns(i)
-      end if
-
       ! Match based on pattern type
       select case (opts%pattern_type)
         case (PATTERN_FIXED)
+          if (opts%ignore_case) then
+            search_pattern = to_lower(patterns(i))
+          else
+            search_pattern = patterns(i)
+          end if
           matches = match_fixed_string(search_line, search_pattern, opts)
+
         case (PATTERN_BRE, PATTERN_ERE)
-          ! TODO: Implement regex matching in Phase 2
-          ! For now, fall back to fixed string
-          matches = match_fixed_string(search_line, search_pattern, opts)
+          if (present(compiled) .and. compiled%compiled) then
+            matches = regex_match(compiled%regexes(i), line, opts%ignore_case)
+          else
+            ! Fallback if no compiled patterns (shouldn't happen in normal use)
+            matches = match_regex_inline(line, patterns(i), opts)
+          end if
+
         case (PATTERN_PERL)
-          ! TODO: Implement Perl regex in Phase 3 (stretch goal)
-          matches = match_fixed_string(search_line, search_pattern, opts)
+          ! TODO: Implement Perl regex (stretch goal)
+          ! Fall back to BRE for now
+          if (present(compiled) .and. compiled%compiled) then
+            matches = regex_match(compiled%regexes(i), line, opts%ignore_case)
+          else
+            matches = match_fixed_string(search_line, patterns(i), opts)
+          end if
       end select
 
       if (matches) exit
@@ -63,6 +139,37 @@ contains
     end if
 
   end function match_line
+
+  function match_regex_inline(line, pattern, opts) result(matches)
+    !> Compile and match regex inline (less efficient, for fallback)
+    character(len=*), intent(in) :: line
+    character(len=*), intent(in) :: pattern
+    type(grep_options), intent(in) :: opts
+    logical :: matches
+
+    type(regex_t) :: re
+    integer :: ierr
+    logical :: is_ere
+    character(len=max_pattern_len) :: pat
+
+    matches = .false.
+    is_ere = (opts%pattern_type == PATTERN_ERE)
+
+    pat = pattern
+    if (opts%word_regexp) then
+      pat = '\<' // trim(pattern) // '\>'
+    end if
+    if (opts%line_regexp) then
+      pat = '^' // trim(pat) // '$'
+    end if
+
+    call regex_compile(re, trim(pat), is_ere, ierr)
+    if (ierr /= 0) return
+
+    matches = regex_match(re, line, opts%ignore_case)
+    call regex_free(re)
+
+  end function match_regex_inline
 
   function match_fixed_string(line, pattern, opts) result(matches)
     !> Fixed string matching (for -F mode)
@@ -166,11 +273,12 @@ contains
 
   end function to_lower
 
-  function process_source(src, patterns, opts) result(found_match)
+  function process_source(src, patterns, opts, compiled) result(found_match)
     !> Process a single input source, return true if any matches found
     type(input_source), intent(inout) :: src
     character(len=max_pattern_len), intent(in) :: patterns(:)
     type(grep_options), intent(inout) :: opts
+    type(compiled_patterns_t), intent(in), optional :: compiled
     logical :: found_match
 
     character(len=max_line_len) :: line
@@ -194,7 +302,11 @@ contains
 
     ! Process lines
     do while (src%read_line(line, line_num, byte_off))
-      line_matched = match_line(line, patterns, opts)
+      if (present(compiled)) then
+        line_matched = match_line(line, patterns, opts, compiled)
+      else
+        line_matched = match_line(line, patterns, opts)
+      end if
 
       if (line_matched) then
         found_match = .true.

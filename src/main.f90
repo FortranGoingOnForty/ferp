@@ -7,6 +7,7 @@ program ferp
   use ferp_io
   use ferp_matcher
   use, intrinsic :: iso_c_binding, only: c_int
+  use, intrinsic :: iso_fortran_env, only: error_unit
   implicit none
 
   interface
@@ -20,6 +21,7 @@ program ferp
   character(len=max_pattern_len), allocatable :: patterns(:)
   character(len=max_path_len), allocatable :: files(:)
   type(input_source) :: src
+  type(compiled_patterns_t) :: compiled
   integer :: ierr, i
   logical :: any_match, file_match
 
@@ -29,6 +31,15 @@ program ferp
     call c_exit(2_c_int)
   end if
 
+  ! Compile patterns for regex modes
+  if (opts%pattern_type /= PATTERN_FIXED) then
+    call compile_patterns(patterns, opts, compiled, ierr)
+    if (ierr /= 0) then
+      write(error_unit, '(A)') 'ferp: Invalid regular expression'
+      call c_exit(2_c_int)
+    end if
+  end if
+
   any_match = .false.
 
   ! Process input sources
@@ -36,27 +47,34 @@ program ferp
     ! No files specified - read from stdin
     opts%reading_stdin = .true.
     if (src%open('-')) then
-      any_match = process_source(src, patterns, opts)
+      if (opts%pattern_type /= PATTERN_FIXED) then
+        any_match = process_source(src, patterns, opts, compiled)
+      else
+        any_match = process_source(src, patterns, opts)
+      end if
       call src%close()
     end if
   else
     ! Process each file
     do i = 1, size(files)
       if (src%open(trim(files(i)), opts%no_messages)) then
-        file_match = process_source(src, patterns, opts)
+        if (opts%pattern_type /= PATTERN_FIXED) then
+          file_match = process_source(src, patterns, opts, compiled)
+        else
+          file_match = process_source(src, patterns, opts)
+        end if
         if (file_match) any_match = .true.
         call src%close()
 
         ! In quiet mode, exit on first match
         if (opts%quiet .and. any_match) exit
-      else
-        ! File open failed - set error exit code
-        ! (error message already printed by source_open unless -s)
-        if (.not. any_match) then
-          ! Will exit with code 2 if no matches and there was an error
-        end if
       end if
     end do
+  end if
+
+  ! Clean up compiled patterns
+  if (opts%pattern_type /= PATTERN_FIXED) then
+    call free_patterns(compiled)
   end if
 
   ! Exit with appropriate code
