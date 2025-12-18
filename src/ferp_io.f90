@@ -1,7 +1,8 @@
 module ferp_io
   !> File I/O handling for FERP
+  !> Supports dynamic line length (no fixed limit)
   use ferp_kinds
-  use, intrinsic :: iso_fortran_env, only: input_unit, error_unit, iostat_end
+  use, intrinsic :: iso_fortran_env, only: input_unit, error_unit, iostat_end, iostat_eor
   implicit none
   private
 
@@ -25,8 +26,8 @@ module ferp_io
   contains
     procedure :: open => source_open
     procedure :: close => source_close
-    procedure :: read_line => source_read_line
-    procedure :: read_line_null => source_read_line_null
+    procedure :: read_line_dynamic => source_read_line_dynamic
+    procedure :: read_line_null_dynamic => source_read_line_null_dynamic
     procedure :: check_binary => source_check_binary
   end type input_source
 
@@ -55,7 +56,6 @@ contains
     ! Reset state (but preserve is_binary if already set by caller)
     this%byte_offset = 0
     this%line_number = 0
-    ! Note: is_binary is NOT reset here - it should be set BEFORE calling open
     this%eof_reached = .false.
 
     ! Handle stdin
@@ -71,7 +71,7 @@ contains
     this%source_type = SOURCE_FILE
     this%filename = filename
 
-    ! Open file - use stream access for null-data mode
+    ! Open file - use stream access for null-data mode, otherwise sequential
     if (this%null_data_mode) then
       open(newunit=this%unit_num, file=filename, status='old', action='read', &
            access='stream', form='unformatted', iostat=ios, iomsg=errmsg)
@@ -103,25 +103,30 @@ contains
     this%is_open = .false.
   end subroutine source_close
 
-  function source_read_line(this, line, line_num, byte_off) result(success)
-    !> Read a line from the input source
+  function source_read_line_dynamic(this, line, line_num, byte_off) result(success)
+    !> Read a line from the input source with dynamic allocation
+    !> Uses a fixed read buffer but returns an allocatable string (thread-safe)
     class(input_source), intent(inout) :: this
-    character(len=*), intent(out) :: line
+    character(len=:), allocatable, intent(out) :: line
     integer, intent(out) :: line_num
     integer(i64), intent(out) :: byte_off
     logical :: success
 
     integer :: ios
     integer :: line_len
+    ! Use a generous fixed buffer for reading (64KB handles most lines)
+    integer, parameter :: READ_BUFFER_SIZE = 65536
+    character(len=READ_BUFFER_SIZE) :: buffer
 
     success = .false.
-    line = ''
     line_num = 0
     byte_off = 0
+    if (allocated(line)) deallocate(line)
 
     if (.not. this%is_open .or. this%eof_reached) return
 
-    read(this%unit_num, '(A)', iostat=ios) line
+    ! Read line using standard Fortran I/O
+    read(this%unit_num, '(A)', iostat=ios) buffer
 
     if (ios == iostat_end) then
       this%eof_reached = .true.
@@ -134,12 +139,18 @@ contains
     end if
 
     ! Strip trailing carriage return for Windows line endings (\r\n)
-    line_len = len_trim(line)
+    line_len = len_trim(buffer)
     if (line_len > 0) then
-      if (line(line_len:line_len) == char(13)) then
-        line(line_len:line_len) = ' '
+      if (buffer(line_len:line_len) == char(13)) then
         line_len = line_len - 1
       end if
+    end if
+
+    ! Allocate result string trimmed to actual length
+    if (line_len > 0) then
+      line = buffer(1:line_len)
+    else
+      line = ''
     end if
 
     ! Update state
@@ -147,32 +158,36 @@ contains
     line_num = this%line_number
     byte_off = this%byte_offset
 
-    ! Update byte offset (line length + newline, +1 for CR if present)
+    ! Update byte offset (line length + newline)
     this%byte_offset = this%byte_offset + int(line_len, i64) + 1_i64
 
     success = .true.
 
-  end function source_read_line
+  end function source_read_line_dynamic
 
-  function source_read_line_null(this, line, line_num, byte_off) result(success)
+  function source_read_line_null_dynamic(this, line, line_num, byte_off) result(success)
     !> Read a NUL-terminated line from the input source (for -z mode)
+    !> Line buffer grows automatically to accommodate any line length
     class(input_source), intent(inout) :: this
-    character(len=*), intent(out) :: line
+    character(len=:), allocatable, intent(out) :: line
     integer, intent(out) :: line_num
     integer(i64), intent(out) :: byte_off
     logical :: success
 
-    integer :: ios, pos, max_len
+    integer :: ios, pos, capacity
     character(len=1) :: ch
+    character(len=:), allocatable :: new_buf
 
     success = .false.
-    line = ''
     line_num = 0
     byte_off = 0
+    if (allocated(line)) deallocate(line)
 
     if (.not. this%is_open .or. this%eof_reached) return
 
-    max_len = len(line)
+    ! Start with initial buffer
+    capacity = initial_line_len
+    allocate(character(len=capacity) :: line)
     pos = 0
 
     ! Read byte by byte until NUL or EOF
@@ -182,14 +197,17 @@ contains
       if (ios == iostat_end) then
         this%eof_reached = .true.
         if (pos > 0) then
-          ! Return what we have
-          exit
+          exit  ! Return what we have
         else
+          deallocate(line)
           return
         end if
       end if
 
-      if (ios /= 0) return
+      if (ios /= 0) then
+        deallocate(line)
+        return
+      end if
 
       ! Check for NUL terminator
       if (ch == char(0)) exit
@@ -200,12 +218,26 @@ contains
       ! Convert embedded newlines to space
       if (ch == char(10)) ch = ' '
 
+      ! Grow buffer if needed
+      if (pos >= capacity) then
+        capacity = capacity * 2
+        allocate(character(len=capacity) :: new_buf)
+        if (pos > 0) new_buf(1:pos) = line(1:pos)
+        call move_alloc(new_buf, line)
+      end if
+
       ! Add character to line
       pos = pos + 1
-      if (pos <= max_len) then
-        line(pos:pos) = ch
-      end if
+      line(pos:pos) = ch
     end do
+
+    ! Trim to actual length
+    if (pos > 0) then
+      new_buf = line(1:pos)
+      call move_alloc(new_buf, line)
+    else
+      line = ''
+    end if
 
     ! Update state
     this%line_number = this%line_number + 1
@@ -213,11 +245,11 @@ contains
     byte_off = this%byte_offset
 
     ! Update byte offset (record length + NUL)
-    this%byte_offset = this%byte_offset + int(pos, i64) + 1_i64
+    this%byte_offset = this%byte_offset + int(len(line), i64) + 1_i64
 
     success = .true.
 
-  end function source_read_line_null
+  end function source_read_line_null_dynamic
 
   function check_binary_file(filename) result(is_binary)
     !> Check if a file is binary by looking for NUL bytes or non-text chars

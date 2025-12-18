@@ -6,7 +6,7 @@ module ferp_kinds
   private
 
   public :: i32, i64, dp
-  public :: max_line_len, max_path_len, max_pattern_len
+  public :: initial_line_len, max_line_len, max_path_len, max_pattern_len
 
   !> Integer kinds
   integer, parameter :: i32 = int32
@@ -16,7 +16,8 @@ module ferp_kinds
   integer, parameter :: dp = real64
 
   !> Buffer size constants
-  integer, parameter :: max_line_len = 1048576  ! 1MB max line length
+  integer, parameter :: initial_line_len = 8192   ! Initial buffer size for dynamic line reading
+  integer, parameter :: max_line_len = 8192       ! Legacy - kept for compatibility, will be removed
   integer, parameter :: max_path_len = 4096
   integer, parameter :: max_pattern_len = 4096
 
