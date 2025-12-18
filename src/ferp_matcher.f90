@@ -166,7 +166,7 @@ contains
     character(len=*), intent(in) :: line
     character(len=max_pattern_len), intent(in) :: patterns(:)
     type(grep_options), intent(in) :: opts
-    type(compiled_patterns_t), intent(in), optional :: compiled
+    type(compiled_patterns_t), intent(inout), optional :: compiled  ! inout for DFA cache
     logical :: matches
 
     integer :: i
@@ -411,7 +411,7 @@ contains
     character(len=*), intent(in) :: line
     character(len=max_pattern_len), intent(in) :: patterns(:)
     type(grep_options), intent(in) :: opts
-    type(compiled_patterns_t), intent(in), optional :: compiled
+    type(compiled_patterns_t), intent(inout), optional :: compiled  ! inout for DFA cache
     integer, intent(out) :: match_starts(:), match_ends(:)
     integer, intent(out) :: num_matches
 
@@ -524,7 +524,7 @@ contains
     type(input_source), intent(inout) :: src
     character(len=max_pattern_len), intent(in) :: patterns(:)
     type(grep_options), intent(inout) :: opts
-    type(compiled_patterns_t), intent(in), optional :: compiled
+    type(compiled_patterns_t), intent(inout), optional :: compiled  ! inout for DFA cache
     logical :: found_match
 
     character(len=:), allocatable :: line

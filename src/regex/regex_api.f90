@@ -6,6 +6,7 @@ module regex_api
   use regex_parser
   use regex_nfa
   use regex_engine
+  use regex_optimizer
   implicit none
   private
 
@@ -18,6 +19,7 @@ module regex_api
   type :: regex_t
     private
     type(nfa_t) :: nfa
+    type(optimized_nfa_t) :: opt_nfa  ! Optimized NFA for faster matching
     type(ast_pool_t) :: ast_pool
     logical :: compiled = .false.
     logical :: is_ere = .false.
@@ -58,6 +60,8 @@ contains
       re%nfa%states(re%nfa%accept_state)%is_accept = .true.
       ! Add epsilon transition for empty match
       call add_eps(re%nfa, re%nfa%start_state, re%nfa%accept_state)
+      ! Optimize NFA for faster matching
+      call optimize_nfa(re%opt_nfa, re%nfa)
       re%compiled = .true.
       re%num_groups = 0
       return
@@ -87,6 +91,9 @@ contains
       return
     end if
 
+    ! Optimize NFA for faster matching
+    call optimize_nfa(re%opt_nfa, re%nfa)
+
     re%compiled = .true.
 
   contains
@@ -102,7 +109,7 @@ contains
 
   function regex_match(re, text, ignore_case) result(matched)
     !> Check if pattern matches anywhere in text
-    type(regex_t), intent(in) :: re
+    type(regex_t), intent(inout) :: re  ! inout for DFA cache
     character(len=*), intent(in) :: text
     logical, intent(in), optional :: ignore_case
     logical :: matched
@@ -116,14 +123,15 @@ contains
     icase = .false.
     if (present(ignore_case)) icase = ignore_case
 
-    res = nfa_search(re%nfa, text, icase)
+    ! Use optimized search with bit vectors and prefix skip
+    res = optimized_search(re%opt_nfa, text, icase)
     matched = res%matched
 
   end function regex_match
 
   function regex_search(re, text, ignore_case) result(res)
     !> Search for pattern in text, return match result with positions
-    type(regex_t), intent(in) :: re
+    type(regex_t), intent(inout) :: re  ! inout for DFA cache
     character(len=*), intent(in) :: text
     logical, intent(in), optional :: ignore_case
     type(match_result_t) :: res
@@ -136,7 +144,8 @@ contains
     icase = .false.
     if (present(ignore_case)) icase = ignore_case
 
-    res = nfa_search(re%nfa, text, icase)
+    ! Use optimized search with bit vectors and prefix skip
+    res = optimized_search(re%opt_nfa, text, icase)
 
   end function regex_search
 
