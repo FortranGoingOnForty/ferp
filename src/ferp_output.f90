@@ -1,5 +1,6 @@
 module ferp_output
   !> Output formatting for FERP
+  !> All output functions are thread-safe via OMP critical sections
   use ferp_kinds
   use ferp_options
   use, intrinsic :: iso_fortran_env, only: output_unit, error_unit
@@ -41,6 +42,7 @@ contains
 
   subroutine print_match(line, filename, line_num, byte_off, opts)
     !> Print a matching line with appropriate prefixes
+    !> Thread-safe via OMP critical section
     character(len=*), intent(in) :: line
     character(len=*), intent(in) :: filename
     integer, intent(in) :: line_num
@@ -50,6 +52,7 @@ contains
     ! Quiet mode - no output
     if (opts%quiet) return
 
+    !$omp critical(output_lock)
     ! Print filename prefix
     if (opts%show_filename .and. .not. opts%hide_filename) then
       if (opts%null_after_filename) then
@@ -83,11 +86,13 @@ contains
 
     ! Line-buffered mode
     if (opts%line_buffered) flush(output_unit)
+    !$omp end critical(output_lock)
 
   end subroutine print_match
 
   subroutine print_context_line(line, filename, line_num, byte_off, opts)
     !> Print a context line (uses - instead of : as separator)
+    !> Thread-safe via OMP critical section
     character(len=*), intent(in) :: line
     character(len=*), intent(in) :: filename
     integer, intent(in) :: line_num
@@ -96,6 +101,7 @@ contains
 
     if (opts%quiet) return
 
+    !$omp critical(output_lock)
     ! Print filename prefix with - separator
     if (opts%show_filename .and. .not. opts%hide_filename) then
       if (opts%null_after_filename) then
@@ -129,31 +135,37 @@ contains
 
     ! Line-buffered mode
     if (opts%line_buffered) flush(output_unit)
+    !$omp end critical(output_lock)
 
   end subroutine print_context_line
 
   subroutine print_separator(opts)
     !> Print group separator between context groups
+    !> Thread-safe via OMP critical section
     type(grep_options), intent(in) :: opts
 
     if (opts%quiet) return
     if (opts%no_group_separator) return
 
+    !$omp critical(output_lock)
     write(output_unit, '(A)') trim(opts%group_separator)
 
     ! Line-buffered mode
     if (opts%line_buffered) flush(output_unit)
+    !$omp end critical(output_lock)
 
   end subroutine print_separator
 
   subroutine print_count(count, filename, opts)
     !> Print match count (for -c option)
+    !> Thread-safe via OMP critical section
     integer, intent(in) :: count
     character(len=*), intent(in) :: filename
     type(grep_options), intent(in) :: opts
 
     if (opts%quiet) return
 
+    !$omp critical(output_lock)
     if (opts%show_filename .and. .not. opts%hide_filename) then
       if (opts%null_after_filename) then
         write(output_unit, '(A,A,I0)') trim(filename), char(0), count
@@ -166,16 +178,19 @@ contains
 
     ! Line-buffered mode
     if (opts%line_buffered) flush(output_unit)
+    !$omp end critical(output_lock)
 
   end subroutine print_count
 
   subroutine print_filename(filename, opts)
     !> Print just filename (for -l, -L options)
+    !> Thread-safe via OMP critical section
     character(len=*), intent(in) :: filename
     type(grep_options), intent(in) :: opts
 
     if (opts%quiet) return
 
+    !$omp critical(output_lock)
     if (opts%null_after_filename) then
       write(output_unit, '(A,A)', advance='no') trim(filename), char(0)
     else
@@ -184,25 +199,30 @@ contains
 
     ! Line-buffered mode
     if (opts%line_buffered) flush(output_unit)
+    !$omp end critical(output_lock)
 
   end subroutine print_filename
 
   subroutine print_binary_match(filename, opts)
     !> Print binary file match message
+    !> Thread-safe via OMP critical section
     character(len=*), intent(in) :: filename
     type(grep_options), intent(in) :: opts
 
     if (opts%quiet) return
 
+    !$omp critical(output_lock)
     write(output_unit, '(A)') 'Binary file ' // trim(filename) // ' matches'
 
     ! Line-buffered mode
     if (opts%line_buffered) flush(output_unit)
+    !$omp end critical(output_lock)
 
   end subroutine print_binary_match
 
   subroutine print_only_match(line, match_start, match_end, filename, line_num, byte_off, opts)
     !> Print only the matched portion of a line (for -o option)
+    !> Thread-safe via OMP critical section
     character(len=*), intent(in) :: line
     integer, intent(in) :: match_start, match_end
     character(len=*), intent(in) :: filename
@@ -212,6 +232,7 @@ contains
 
     if (opts%quiet) return
 
+    !$omp critical(output_lock)
     ! Print filename prefix
     if (opts%show_filename .and. .not. opts%hide_filename) then
       if (opts%null_after_filename) then
@@ -247,12 +268,14 @@ contains
 
     ! Line-buffered mode
     if (opts%line_buffered) flush(output_unit)
+    !$omp end critical(output_lock)
 
   end subroutine print_only_match
 
   subroutine print_match_colored(line, filename, line_num, byte_off, opts, &
                                   match_starts, match_ends, num_matches)
     !> Print a matching line with colored highlighting of matches
+    !> Thread-safe via OMP critical section
     character(len=*), intent(in) :: line
     character(len=*), intent(in) :: filename
     integer, intent(in) :: line_num
@@ -274,6 +297,7 @@ contains
       use_color = stdout_is_tty()
     end if
 
+    !$omp critical(output_lock)
     ! Print filename prefix
     if (opts%show_filename .and. .not. opts%hide_filename) then
       if (use_color) then
@@ -363,6 +387,7 @@ contains
 
     ! Line-buffered mode
     if (opts%line_buffered) flush(output_unit)
+    !$omp end critical(output_lock)
 
   end subroutine print_match_colored
 

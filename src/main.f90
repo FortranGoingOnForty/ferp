@@ -170,10 +170,8 @@ program ferp
       end if
 
       if (src%open(trim(files(i)), opts%no_messages, opts%null_data)) then
-        ! Critical section for output serialization (prevents interleaved output)
-        !$omp critical(output_lock)
+        ! No critical section here - output functions are thread-safe
         file_match = process_source(src, patterns, opts, compiled)
-        !$omp end critical(output_lock)
         if (file_match) then
           any_match = .true.
           ! Signal early termination for quiet mode
