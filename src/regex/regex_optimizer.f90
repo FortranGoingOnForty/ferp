@@ -15,6 +15,8 @@ module regex_optimizer
   integer, parameter :: MAX_STATES = 1024
   integer, parameter :: MAX_PREFIX_LEN = 64
   integer, parameter :: DFA_CACHE_SIZE = 256  ! Cache recent state transitions
+  integer, parameter :: MAX_DFA_STATES = 512  ! Max DFA states before fallback to NFA
+  integer, parameter :: DFA_DEAD_STATE = 0    ! Special state: no match possible
 
   !> Bit vector for state sets - much faster than array lookup
   type :: state_set_t
@@ -39,6 +41,23 @@ module regex_optimizer
     logical :: is_case_insensitive = .false.  ! Case sensitivity flag
   end type dfa_cache_entry_t
 
+  !> Full DFA state - precomputed transitions for all 256 characters
+  type :: dfa_state_t
+    integer :: transitions(0:255) = DFA_DEAD_STATE  ! Next state for each byte
+    type(state_set_t) :: nfa_states                  ! Corresponding NFA state set
+    logical :: is_accept = .false.                   ! Is this an accepting state?
+    integer(8) :: state_hash = 0                     ! Hash for lookup
+  end type dfa_state_t
+
+  !> Compiled DFA for O(n) matching
+  type :: compiled_dfa_t
+    type(dfa_state_t), allocatable :: states(:)     ! DFA states
+    integer :: num_states = 0                        ! Number of states built
+    integer :: start_state = 0                       ! Starting DFA state
+    logical :: compiled = .false.                    ! DFA successfully compiled
+    logical :: too_large = .false.                   ! DFA exceeded size limit
+  end type compiled_dfa_t
+
   !> Optimized NFA with precomputed data
   type :: optimized_nfa_t
     type(nfa_t) :: nfa                          ! Original NFA
@@ -49,6 +68,8 @@ module regex_optimizer
     integer :: skip_table(0:255) = 0             ! Boyer-Moore skip table for prefix
     type(state_set_t) :: start_closure           ! Pre-computed start state epsilon closure
     type(dfa_cache_entry_t) :: dfa_cache(DFA_CACHE_SIZE)  ! Lazy DFA cache
+    type(compiled_dfa_t) :: dfa                  ! Full compiled DFA (if available)
+    logical :: use_dfa = .false.                 ! Use DFA instead of NFA
     logical :: optimized = .false.
   end type optimized_nfa_t
 
@@ -158,6 +179,7 @@ contains
     opt%prefix = ''
     opt%anchored_start = .false.
     opt%anchored_end = .false.
+    opt%use_dfa = .false.
 
     ! Extract literal prefix and detect anchors
     call extract_prefix_and_anchors(opt)
@@ -172,6 +194,14 @@ contains
 
     ! Clear DFA cache
     opt%dfa_cache%valid = .false.
+
+    ! Try to compile full DFA for O(n) matching
+    ! Only for patterns without any position-dependent transitions (anchors)
+    if (.not. has_anchor_transitions(opt%nfa)) then
+      call compile_dfa(opt)
+      ! DEBUG: Print DFA compilation result (uncomment for debugging)
+      ! write(0,*) 'DFA compiled:', opt%use_dfa, 'states:', opt%dfa%num_states, 'too_large:', opt%dfa%too_large
+    end if
 
     opt%optimized = .true.
 
@@ -299,6 +329,232 @@ contains
     end do
   end subroutine compute_epsilon_closure_basic
 
+  function has_anchor_transitions(nfa) result(has_anchors)
+    !> Check if NFA has any anchor transitions (position-dependent)
+    !> These include ^, $, \<, \>, \b, \B
+    type(nfa_t), intent(in) :: nfa
+    logical :: has_anchors
+
+    integer :: state, i
+    type(nfa_transition_t) :: trans
+
+    has_anchors = .false.
+
+    do state = 1, nfa%num_states
+      do i = 1, nfa%states(state)%num_trans
+        trans = nfa%states(state)%trans(i)
+        if (trans%trans_type == TRANS_ANCHOR) then
+          has_anchors = .true.
+          return
+        end if
+      end do
+    end do
+  end function has_anchor_transitions
+
+  !---------------------------------------------------------------------------
+  ! DFA Compilation: Convert NFA to DFA for O(n) matching
+  !---------------------------------------------------------------------------
+
+  subroutine compile_dfa(opt)
+    !> Compile NFA to DFA using subset construction
+    !> Creates DFA states lazily, stopping if too many states
+    type(optimized_nfa_t), intent(inout) :: opt
+
+    type(state_set_t) :: start_set, next_set
+    integer :: worklist(MAX_DFA_STATES), work_head, work_tail
+    integer :: dfa_idx, char_code, next_idx, old_num_states
+
+    ! Allocate DFA states
+    if (allocated(opt%dfa%states)) deallocate(opt%dfa%states)
+    allocate(opt%dfa%states(MAX_DFA_STATES))
+    opt%dfa%num_states = 0
+    opt%dfa%compiled = .false.
+    opt%dfa%too_large = .false.
+    opt%use_dfa = .false.
+
+    ! Compute start state: epsilon closure of NFA start
+    call start_set%clear()
+    call compute_epsilon_closure_basic(opt%nfa, opt%nfa%start_state, start_set)
+
+    if (start_set%is_empty()) return
+
+    ! Create initial DFA state
+    opt%dfa%num_states = 1
+    opt%dfa%states(1)%nfa_states = start_set
+    opt%dfa%states(1)%state_hash = start_set%hash()
+    opt%dfa%states(1)%is_accept = is_accepting_set(opt%nfa, start_set)
+    opt%dfa%start_state = 1
+
+    ! Initialize worklist with start state
+    work_head = 1
+    work_tail = 1
+    worklist(1) = 1
+
+    ! Process worklist: for each DFA state, compute transitions
+    do while (work_head <= work_tail)
+      dfa_idx = worklist(work_head)
+      work_head = work_head + 1
+
+      ! Compute transitions for all 256 characters
+      do char_code = 0, 255
+        call next_set%clear()
+
+        ! Compute NFA transitions for this character
+        call compute_char_transitions_simple(opt%nfa, opt%dfa%states(dfa_idx)%nfa_states, &
+                                             char(char_code), next_set)
+
+        ! Compute epsilon closure of result
+        if (.not. next_set%is_empty()) then
+          call expand_epsilon_closure_simple(opt%nfa, next_set)
+        end if
+
+        if (next_set%is_empty()) then
+          opt%dfa%states(dfa_idx)%transitions(char_code) = DFA_DEAD_STATE
+        else
+          ! Find or create DFA state for this NFA state set
+          old_num_states = opt%dfa%num_states
+          next_idx = find_or_create_dfa_state(opt%dfa, next_set, opt%nfa)
+
+          if (next_idx == -1) then
+            ! Too many DFA states - abort
+            opt%dfa%too_large = .true.
+            opt%dfa%compiled = .false.
+            return
+          end if
+
+          opt%dfa%states(dfa_idx)%transitions(char_code) = next_idx
+
+          ! Add new state to worklist only if it was just created
+          if (opt%dfa%num_states > old_num_states) then
+            work_tail = work_tail + 1
+            if (work_tail > MAX_DFA_STATES) then
+              opt%dfa%too_large = .true.
+              opt%dfa%compiled = .false.
+              return
+            end if
+            worklist(work_tail) = next_idx
+          end if
+        end if
+      end do
+    end do
+
+    opt%dfa%compiled = .true.
+    opt%use_dfa = .true.
+
+  end subroutine compile_dfa
+
+  function find_or_create_dfa_state(dfa, nfa_states, nfa) result(idx)
+    !> Find existing DFA state for NFA state set, or create new one
+    !> Returns -1 if DFA state limit exceeded
+    type(compiled_dfa_t), intent(inout) :: dfa
+    type(state_set_t), intent(in) :: nfa_states
+    type(nfa_t), intent(in) :: nfa
+    integer :: idx
+
+    integer(8) :: h
+    integer :: i
+
+    h = nfa_states%hash()
+
+    ! Search existing states
+    do i = 1, dfa%num_states
+      if (dfa%states(i)%state_hash == h .and. &
+          dfa%states(i)%nfa_states%equals(nfa_states)) then
+        idx = i
+        return
+      end if
+    end do
+
+    ! Create new state
+    if (dfa%num_states >= MAX_DFA_STATES) then
+      idx = -1
+      return
+    end if
+
+    dfa%num_states = dfa%num_states + 1
+    idx = dfa%num_states
+    dfa%states(idx)%nfa_states = nfa_states
+    dfa%states(idx)%state_hash = h
+    dfa%states(idx)%is_accept = is_accepting_set(nfa, nfa_states)
+    dfa%states(idx)%transitions = DFA_DEAD_STATE
+
+  end function find_or_create_dfa_state
+
+  subroutine compute_char_transitions_simple(nfa, current, c, next_set)
+    !> Compute character transitions without case folding (for DFA compilation)
+    type(nfa_t), intent(in) :: nfa
+    type(state_set_t), intent(in) :: current
+    character(len=1), intent(in) :: c
+    type(state_set_t), intent(inout) :: next_set
+
+    integer :: state, word_idx, bit_idx, i
+    integer(8) :: word, mask
+    type(nfa_transition_t) :: trans
+
+    do word_idx = 1, size(current%bits)
+      word = current%bits(word_idx)
+      if (word == 0) cycle
+
+      do bit_idx = 0, 63
+        mask = ishft(1_8, bit_idx)
+        if (iand(word, mask) /= 0) then
+          state = (word_idx - 1) * 64 + bit_idx + 1
+          if (state > nfa%num_states) cycle
+
+          do i = 1, nfa%states(state)%num_trans
+            trans = nfa%states(state)%trans(i)
+
+            select case (trans%trans_type)
+              case (TRANS_CHAR)
+                if (c == trans%match_char) then
+                  call next_set%add(trans%target)
+                end if
+
+              case (TRANS_CLASS)
+                if (trans%char_class(ichar(c)) .neqv. trans%negated) then
+                  call next_set%add(trans%target)
+                end if
+
+              case (TRANS_ANY)
+                if (c /= char(10)) then
+                  call next_set%add(trans%target)
+                end if
+            end select
+          end do
+        end if
+      end do
+    end do
+  end subroutine compute_char_transitions_simple
+
+  subroutine expand_epsilon_closure_simple(nfa, state_set)
+    !> Expand state set to include epsilon closure (in-place)
+    type(nfa_t), intent(in) :: nfa
+    type(state_set_t), intent(inout) :: state_set
+
+    type(state_set_t) :: result
+    integer :: word_idx, bit_idx, state
+    integer(8) :: word, mask
+
+    call result%clear()
+
+    do word_idx = 1, size(state_set%bits)
+      word = state_set%bits(word_idx)
+      if (word == 0) cycle
+
+      do bit_idx = 0, 63
+        mask = ishft(1_8, bit_idx)
+        if (iand(word, mask) /= 0) then
+          state = (word_idx - 1) * 64 + bit_idx + 1
+          if (state <= nfa%num_states) then
+            call compute_epsilon_closure_basic(nfa, state, result)
+          end if
+        end if
+      end do
+    end do
+
+    call state_set%copy_from(result)
+  end subroutine expand_epsilon_closure_simple
+
   !---------------------------------------------------------------------------
   ! Optimized Search: Use prefix to skip positions
   !---------------------------------------------------------------------------
@@ -316,6 +572,13 @@ contains
     text_len = len_trim(text)
 
     if (opt%nfa%num_states == 0) return
+
+    ! Fast path: use DFA if available (O(n) matching)
+    ! DFA only works for case-sensitive matching (case-insensitive would need 2x states)
+    if (opt%use_dfa .and. .not. ignore_case) then
+      res = dfa_search(opt%dfa, text, text_len)
+      return
+    end if
 
     ! Fast path: anchored start - only try position 1
     if (opt%anchored_start) then
@@ -354,6 +617,75 @@ contains
     end if
 
   end function optimized_search
+
+  function dfa_search(dfa, text, text_len) result(res)
+    !> Fast O(n) DFA-based search
+    !> Tries each starting position and returns first match
+    type(compiled_dfa_t), intent(in) :: dfa
+    character(len=*), intent(in) :: text
+    integer, intent(in) :: text_len
+    type(match_result_t) :: res
+
+    integer :: start_pos
+    type(match_result_t) :: try_res
+
+    res%matched = .false.
+
+    if (.not. dfa%compiled .or. dfa%num_states == 0) return
+
+    ! Try each starting position
+    do start_pos = 1, text_len + 1
+      try_res = dfa_match(dfa, text, text_len, start_pos)
+      if (try_res%matched) then
+        res = try_res
+        return
+      end if
+    end do
+
+  end function dfa_search
+
+  function dfa_match(dfa, text, text_len, start_pos) result(res)
+    !> O(n) DFA matching from a specific position
+    !> Just follows transition table - no state set operations
+    type(compiled_dfa_t), intent(in) :: dfa
+    character(len=*), intent(in) :: text
+    integer, intent(in) :: text_len, start_pos
+    type(match_result_t) :: res
+
+    integer :: state, pos, char_code
+
+    res%matched = .false.
+
+    if (.not. dfa%compiled) return
+
+    state = dfa%start_state
+    pos = start_pos
+
+    ! Check if start state is accepting (empty match)
+    if (dfa%states(state)%is_accept) then
+      res%matched = .true.
+      res%match_start = start_pos
+      res%match_end = start_pos - 1
+    end if
+
+    ! Process each character
+    do while (pos <= text_len)
+      char_code = ichar(text(pos:pos))
+      state = dfa%states(state)%transitions(char_code)
+
+      if (state == DFA_DEAD_STATE) exit
+
+      pos = pos + 1
+
+      ! Check for acceptance (greedy - find longest)
+      if (dfa%states(state)%is_accept) then
+        res%matched = .true.
+        res%match_start = start_pos
+        res%match_end = pos - 1
+      end if
+    end do
+
+  end function dfa_match
 
   function prefix_matches(text, pos, prefix, prefix_len) result(matches)
     character(len=*), intent(in) :: text
