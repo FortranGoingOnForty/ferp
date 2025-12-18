@@ -38,6 +38,7 @@ REGEX_SRCS = $(REGEX_DIR)/regex_types.f90 \
              $(REGEX_DIR)/regex_parser.f90 \
              $(REGEX_DIR)/regex_nfa.f90 \
              $(REGEX_DIR)/regex_engine.f90 \
+             $(REGEX_DIR)/aho_corasick.f90 \
              $(REGEX_DIR)/regex_optimizer.f90 \
              $(REGEX_DIR)/regex_api.f90 \
              $(REGEX_DIR)/pcre_api.f90
@@ -105,7 +106,8 @@ $(BUILD_DIR)/regex_lexer.o: $(BUILD_DIR)/regex_types.o
 $(BUILD_DIR)/regex_parser.o: $(BUILD_DIR)/regex_types.o
 $(BUILD_DIR)/regex_nfa.o: $(BUILD_DIR)/regex_types.o $(BUILD_DIR)/regex_parser.o
 $(BUILD_DIR)/regex_engine.o: $(BUILD_DIR)/regex_types.o
-$(BUILD_DIR)/regex_optimizer.o: $(BUILD_DIR)/regex_types.o
+$(BUILD_DIR)/aho_corasick.o:
+$(BUILD_DIR)/regex_optimizer.o: $(BUILD_DIR)/regex_types.o $(BUILD_DIR)/aho_corasick.o
 $(BUILD_DIR)/regex_api.o: $(BUILD_DIR)/regex_types.o $(BUILD_DIR)/regex_lexer.o $(BUILD_DIR)/regex_parser.o $(BUILD_DIR)/regex_nfa.o $(BUILD_DIR)/regex_engine.o $(BUILD_DIR)/regex_optimizer.o
 $(BUILD_DIR)/pcre_api.o:
 

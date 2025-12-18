@@ -26,6 +26,7 @@ module regex_api
     integer :: error_code = 0
     character(len=256) :: error_msg = ''
     integer :: num_groups = 0
+    character(len=4096) :: pattern = ''  ! Original pattern for AC detection
   contains
     procedure :: is_compiled => regex_is_compiled
   end type regex_t
@@ -93,6 +94,10 @@ contains
 
     ! Optimize NFA for faster matching
     call optimize_nfa(re%opt_nfa, re%nfa)
+
+    ! Store pattern and try Aho-Corasick for alternation patterns
+    re%pattern = pattern
+    call try_build_aho_corasick(re%opt_nfa, pattern, extended, .false.)
 
     re%compiled = .true.
 

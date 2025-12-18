@@ -5,12 +5,15 @@ module regex_optimizer
   !>   - Bit vector state sets for O(1) operations
   !>   - Lazy DFA state caching
   !>   - Anchored pattern fast paths
+  !>   - Aho-Corasick for alternation patterns
   use regex_types
+  use aho_corasick
   implicit none
   private
 
   public :: optimized_nfa_t
   public :: optimize_nfa, optimized_match, optimized_search
+  public :: try_build_aho_corasick
 
   integer, parameter :: MAX_STATES = 1024
   integer, parameter :: MAX_PREFIX_LEN = 64
@@ -70,6 +73,8 @@ module regex_optimizer
     type(dfa_cache_entry_t) :: dfa_cache(DFA_CACHE_SIZE)  ! Lazy DFA cache
     type(compiled_dfa_t) :: dfa                  ! Full compiled DFA (if available)
     logical :: use_dfa = .false.                 ! Use DFA instead of NFA
+    type(ac_automaton_t) :: ac                   ! Aho-Corasick automaton (for alternation)
+    logical :: use_aho_corasick = .false.        ! Use Aho-Corasick for matching
     logical :: optimized = .false.
   end type optimized_nfa_t
 
@@ -584,6 +589,15 @@ contains
     res%matched = .false.
     text_len = len_trim(text)
 
+    ! Fast path: use Aho-Corasick for alternation patterns
+    ! Only use AC if ignore_case setting matches what was compiled
+    if (opt%use_aho_corasick) then
+      if (ignore_case .eqv. opt%ac%ignore_case) then
+        res = ac_optimized_search(opt%ac, text)
+        return
+      end if
+    end if
+
     if (opt%nfa%num_states == 0) return
 
     ! Fast path: use DFA if available (O(n) matching)
@@ -1096,5 +1110,198 @@ contains
 
     if (negated) res = .not. res
   end function char_in_class_opt
+
+  !---------------------------------------------------------------------------
+  ! Aho-Corasick Integration for Alternation Patterns
+  !---------------------------------------------------------------------------
+
+  subroutine try_build_aho_corasick(opt, pattern, is_ere, ignore_case)
+    !> Try to build Aho-Corasick automaton for simple alternation patterns
+    !> Pattern like "foo|bar|baz" with only literal characters and | separators
+    type(optimized_nfa_t), intent(inout) :: opt
+    character(len=*), intent(in) :: pattern
+    logical, intent(in) :: is_ere, ignore_case
+
+    character(len=4096), allocatable :: alternatives(:)
+    integer :: num_alternatives, ierr
+    logical :: is_simple
+
+    allocate(alternatives(1000))
+
+    opt%use_aho_corasick = .false.
+
+    ! Check if pattern is simple alternation of literals
+    call parse_simple_alternation(pattern, is_ere, alternatives, num_alternatives, is_simple)
+
+    ! DEBUG (commented out for production)
+    ! write(error_unit, '(A,I0,A,L1)') 'DEBUG AC: num_alt=', num_alternatives, ' is_simple=', is_simple
+
+    if (.not. is_simple .or. num_alternatives < 2) return
+
+    ! Build Aho-Corasick automaton
+    call ac_build(opt%ac, alternatives, num_alternatives, ignore_case, ierr)
+
+    if (ierr == 0) then
+      opt%use_aho_corasick = .true.
+    end if
+
+    deallocate(alternatives)
+
+  end subroutine try_build_aho_corasick
+
+  subroutine parse_simple_alternation(pattern, is_ere, alternatives, num_alt, is_simple)
+    !> Parse pattern to check if it's simple alternation of literals
+    !> Returns the alternatives if so
+    character(len=*), intent(in) :: pattern
+    logical, intent(in) :: is_ere
+    character(len=*), intent(out) :: alternatives(:)
+    integer, intent(out) :: num_alt
+    logical, intent(out) :: is_simple
+
+    integer :: i, pat_len, alt_start, alt_len
+    character(len=1) :: c, next_c
+    logical :: in_escape
+
+    is_simple = .true.
+    num_alt = 0
+    pat_len = len_trim(pattern)
+
+    if (pat_len == 0) then
+      is_simple = .false.
+      return
+    end if
+
+    alt_start = 1
+    alt_len = 0
+    in_escape = .false.
+    i = 1
+
+    do while (i <= pat_len)
+      c = pattern(i:i)
+
+      if (in_escape) then
+        ! In ERE mode, \| is literal |
+        ! In BRE mode, \| is alternation (GNU extension)
+        if (c == '|' .and. .not. is_ere) then
+          ! BRE alternation
+          if (alt_len > 0) then
+            num_alt = num_alt + 1
+            if (num_alt > size(alternatives)) then
+              is_simple = .false.
+              return
+            end if
+            alternatives(num_alt) = pattern(alt_start:alt_start+alt_len-1)
+          else
+            ! Empty alternative - still valid
+            num_alt = num_alt + 1
+            alternatives(num_alt) = ''
+          end if
+          alt_start = i + 1
+          alt_len = 0
+        else if (c == '(' .or. c == ')' .or. c == '{' .or. c == '}' .or. &
+                 c == '<' .or. c == '>' .or. c == 'b' .or. c == 'B' .or. &
+                 c == 'd' .or. c == 'D' .or. c == 'w' .or. c == 'W' .or. &
+                 c == 's' .or. c == 'S' .or. c == '1' .or. c == '2' .or. &
+                 c == '3' .or. c == '4' .or. c == '5' .or. c == '6' .or. &
+                 c == '7' .or. c == '8' .or. c == '9') then
+          ! Regex metacharacter - not simple
+          is_simple = .false.
+          return
+        else
+          ! Escaped literal character (e.g., \., \*, etc.)
+          alt_len = alt_len + 1
+        end if
+        in_escape = .false.
+        i = i + 1
+        cycle
+      end if
+
+      if (c == '\') then
+        in_escape = .true.
+        i = i + 1
+        cycle
+      end if
+
+      ! Check for metacharacters
+      if (is_ere) then
+        ! ERE mode: | is alternation, . * + ? [ ] ^ $ ( ) { } are metacharacters
+        if (c == '|') then
+          ! Alternation separator
+          if (alt_len > 0) then
+            num_alt = num_alt + 1
+            if (num_alt > size(alternatives)) then
+              is_simple = .false.
+              return
+            end if
+            alternatives(num_alt) = pattern(alt_start:alt_start+alt_len-1)
+          else
+            num_alt = num_alt + 1
+            alternatives(num_alt) = ''
+          end if
+          alt_start = i + 1
+          alt_len = 0
+          i = i + 1
+          cycle
+        else if (c == '.' .or. c == '*' .or. c == '+' .or. c == '?' .or. &
+                 c == '[' .or. c == ']' .or. c == '^' .or. c == '$' .or. &
+                 c == '(' .or. c == ')' .or. c == '{' .or. c == '}') then
+          ! Metacharacter - not simple alternation
+          is_simple = .false.
+          return
+        end if
+      else
+        ! BRE mode: only . * [ ] ^ $ are metacharacters
+        ! | is literal, \| is alternation (GNU extension)
+        if (c == '.' .or. c == '*' .or. c == '[' .or. c == ']' .or. &
+            c == '^' .or. c == '$') then
+          is_simple = .false.
+          return
+        end if
+      end if
+
+      ! Regular literal character
+      alt_len = alt_len + 1
+      i = i + 1
+    end do
+
+    ! Handle last alternative
+    if (alt_len > 0 .or. num_alt > 0) then
+      num_alt = num_alt + 1
+      if (num_alt > size(alternatives)) then
+        is_simple = .false.
+        return
+      end if
+      if (alt_len > 0) then
+        alternatives(num_alt) = pattern(alt_start:alt_start+alt_len-1)
+      else
+        alternatives(num_alt) = ''
+      end if
+    end if
+
+    ! Need at least 2 alternatives for Aho-Corasick to be useful
+    if (num_alt < 2) then
+      is_simple = .false.
+    end if
+
+  end subroutine parse_simple_alternation
+
+  function ac_optimized_search(ac, text) result(res)
+    !> Search using Aho-Corasick automaton
+    type(ac_automaton_t), intent(in) :: ac
+    character(len=*), intent(in) :: text
+    type(match_result_t) :: res
+
+    type(ac_match_t) :: ac_match
+
+    res%matched = .false.
+
+    ac_match = ac_search(ac, text)
+    if (ac_match%matched) then
+      res%matched = .true.
+      res%match_start = ac_match%start_pos
+      res%match_end = ac_match%end_pos
+    end if
+
+  end function ac_optimized_search
 
 end module regex_optimizer
