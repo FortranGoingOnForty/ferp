@@ -1,7 +1,9 @@
 module ferp_mmap
   !> Memory-mapped file I/O for FERP
   !> Uses POSIX mmap for efficient file reading
+  !> Uses SIMD for fast newline scanning on ARM64
   use ferp_kinds
+  use ferp_simd
   use, intrinsic :: iso_c_binding
   implicit none
   private
@@ -187,7 +189,7 @@ contains
   end function mmap_get_line
 
   function mmap_read_line(this, line, line_num, byte_off) result(success)
-    !> Read next line from memory-mapped file
+    !> Read next line from memory-mapped file (SIMD-accelerated newline scanning)
     class(mmap_file_t), intent(inout) :: this
     character(len=:), allocatable, intent(out) :: line
     integer, intent(out) :: line_num
@@ -196,6 +198,7 @@ contains
 
     character(len=1, kind=c_char), pointer :: file_data(:)
     integer(c_size_t) :: start_pos, end_pos, line_len
+    integer(c_int64_t) :: newline_pos
     integer :: i
 
     success = .false.
@@ -211,13 +214,18 @@ contains
 
     ! Find start and end of line
     start_pos = this%pos + 1  ! 1-based for Fortran
-    end_pos = start_pos
 
-    ! Scan for newline
-    do while (end_pos <= this%size)
-      if (file_data(end_pos) == char(10)) exit  ! LF
-      end_pos = end_pos + 1
-    end do
+    ! Use SIMD to find newline (16 bytes at a time on ARM64)
+    newline_pos = simd_find_char_ptr(this%data, int(this%size, c_int64_t), &
+                                      int(this%pos, c_int64_t), char(10))
+
+    if (newline_pos < 0) then
+      ! No newline found - rest of file is the line
+      end_pos = this%size + 1
+    else
+      ! Found newline - convert from 0-indexed to 1-indexed
+      end_pos = int(newline_pos, c_size_t) + 1
+    end if
 
     ! Calculate line length (excluding newline)
     line_len = end_pos - start_pos

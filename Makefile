@@ -1,16 +1,21 @@
 # FERP Makefile
 # Fortran Expression Regular Print - A GNU grep clone
 
-# Compiler
+# Compilers
 FC = gfortran
+CC = clang
 
 # Compiler flags
 FFLAGS_COMMON = -std=f2008 -Wall -Wextra -pedantic -cpp
 FFLAGS_DEBUG = $(FFLAGS_COMMON) -g -O0 -fcheck=all -fbacktrace -Wno-unused-dummy-argument
 FFLAGS_RELEASE = $(FFLAGS_COMMON) -O2 -march=native -fopenmp
 
+CFLAGS_DEBUG = -g -O0 -Wall
+CFLAGS_RELEASE = -O2 -march=native
+
 # Default to debug build (release includes OpenMP)
 FFLAGS = $(FFLAGS_DEBUG)
+CFLAGS = $(CFLAGS_DEBUG)
 
 # PCRE2 library (required for -P option)
 # Use pkg-config if available, otherwise fall back to defaults
@@ -37,10 +42,14 @@ REGEX_SRCS = $(REGEX_DIR)/regex_types.f90 \
              $(REGEX_DIR)/regex_api.f90 \
              $(REGEX_DIR)/pcre_api.f90
 
+# C source files (SIMD support)
+C_SRCS = $(SRC_DIR)/simd_scan.c
+
 # Main source files (in dependency order)
 MAIN_SRCS = $(SRC_DIR)/ferp_kinds.f90 \
             $(SRC_DIR)/ferp_options.f90 \
             $(SRC_DIR)/ferp_mmap.f90 \
+            $(SRC_DIR)/ferp_simd.f90 \
             $(SRC_DIR)/ferp_io.f90 \
             $(SRC_DIR)/ferp_output.f90 \
             $(SRC_DIR)/ferp_dir.f90 \
@@ -55,17 +64,20 @@ SRCS = $(REGEX_SRCS) $(MAIN_SRCS)
 # Object files
 REGEX_OBJS = $(patsubst $(REGEX_DIR)/%.f90,$(BUILD_DIR)/%.o,$(REGEX_SRCS))
 MAIN_OBJS = $(patsubst $(SRC_DIR)/%.f90,$(BUILD_DIR)/%.o,$(MAIN_SRCS))
-OBJS = $(REGEX_OBJS) $(MAIN_OBJS)
+C_OBJS = $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(C_SRCS))
+OBJS = $(REGEX_OBJS) $(MAIN_OBJS) $(C_OBJS)
 
 # Default target
 all: $(TARGET)
 
 # Debug build
 debug: FFLAGS = $(FFLAGS_DEBUG)
+debug: CFLAGS = $(CFLAGS_DEBUG)
 debug: clean $(TARGET)
 
 # Release build
 release: FFLAGS = $(FFLAGS_RELEASE)
+release: CFLAGS = $(CFLAGS_RELEASE)
 release: clean $(TARGET)
 
 # Create build directory
@@ -84,6 +96,10 @@ $(BUILD_DIR)/%.o: $(REGEX_DIR)/%.f90 | $(BUILD_DIR)
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.f90 | $(BUILD_DIR)
 	$(FC) $(FFLAGS) -J$(BUILD_DIR) -I$(BUILD_DIR) -c $< -o $@
 
+# Compile C source files
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 # Regex module dependencies
 $(BUILD_DIR)/regex_lexer.o: $(BUILD_DIR)/regex_types.o
 $(BUILD_DIR)/regex_parser.o: $(BUILD_DIR)/regex_types.o
@@ -95,7 +111,8 @@ $(BUILD_DIR)/pcre_api.o:
 
 # Main module dependencies
 $(BUILD_DIR)/ferp_options.o: $(BUILD_DIR)/ferp_kinds.o
-$(BUILD_DIR)/ferp_mmap.o: $(BUILD_DIR)/ferp_kinds.o
+$(BUILD_DIR)/ferp_simd.o: $(BUILD_DIR)/simd_scan.o
+$(BUILD_DIR)/ferp_mmap.o: $(BUILD_DIR)/ferp_kinds.o $(BUILD_DIR)/ferp_simd.o
 $(BUILD_DIR)/ferp_io.o: $(BUILD_DIR)/ferp_kinds.o $(BUILD_DIR)/ferp_mmap.o
 $(BUILD_DIR)/ferp_output.o: $(BUILD_DIR)/ferp_kinds.o $(BUILD_DIR)/ferp_options.o
 $(BUILD_DIR)/ferp_dir.o: $(BUILD_DIR)/ferp_kinds.o
