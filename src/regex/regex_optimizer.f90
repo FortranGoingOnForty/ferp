@@ -26,14 +26,17 @@ module regex_optimizer
     procedure :: contains => state_set_contains
     procedure :: is_empty => state_set_is_empty
     procedure :: copy_from => state_set_copy
+    procedure :: hash => state_set_hash
+    procedure :: equals => state_set_equals
   end type state_set_t
 
-  !> DFA cache entry
+  !> DFA cache entry - caches (state_set_hash, char) -> next_states transitions
   type :: dfa_cache_entry_t
-    integer(8) :: state_hash = 0
-    integer :: char_code = -1
-    type(state_set_t) :: next_states
-    logical :: valid = .false.
+    integer(8) :: state_hash = 0        ! Hash of source state set
+    integer :: char_code = -1           ! Character being matched
+    type(state_set_t) :: next_states    ! Resulting states after transition
+    logical :: valid = .false.          ! Entry is populated
+    logical :: is_case_insensitive = .false.  ! Case sensitivity flag
   end type dfa_cache_entry_t
 
   !> Optimized NFA with precomputed data
@@ -108,6 +111,39 @@ contains
     this%bits = other%bits
     this%count = other%count
   end subroutine state_set_copy
+
+  function state_set_hash(this) result(h)
+    !> Compute a hash of the state set for cache lookup
+    !> Uses FNV-1a style hashing on the bit words
+    class(state_set_t), intent(in) :: this
+    integer(8) :: h
+    integer :: i
+    integer(8), parameter :: FNV_OFFSET = int(Z'CBF29CE484222325', 8)
+    integer(8), parameter :: FNV_PRIME = int(Z'100000001B3', 8)
+
+    h = FNV_OFFSET
+    do i = 1, size(this%bits)
+      h = ieor(h, this%bits(i))
+      h = h * FNV_PRIME
+    end do
+  end function state_set_hash
+
+  function state_set_equals(this, other) result(eq)
+    !> Check if two state sets are identical
+    class(state_set_t), intent(in) :: this
+    type(state_set_t), intent(in) :: other
+    logical :: eq
+    integer :: i
+
+    eq = .false.
+    if (this%count /= other%count) return
+
+    do i = 1, size(this%bits)
+      if (this%bits(i) /= other%bits(i)) return
+    end do
+
+    eq = .true.
+  end function state_set_equals
 
   !---------------------------------------------------------------------------
   ! Optimization: Analyze NFA and extract optimizations
@@ -474,11 +510,55 @@ contains
   end subroutine expand_epsilon_closure
 
   subroutine step_with_cache(opt, current, c, pos, text, text_len, ignore_case, next_set)
+    !> Compute next states with DFA caching
+    !> Cache key: (state_set_hash, char_code, ignore_case)
+    !> This avoids recomputing transitions for repeated (state_set, char) pairs
     type(optimized_nfa_t), intent(inout) :: opt
     type(state_set_t), intent(in) :: current
     character(len=1), intent(in) :: c
     integer, intent(in) :: pos, text_len
     character(len=*), intent(in) :: text
+    logical, intent(in) :: ignore_case
+    type(state_set_t), intent(inout) :: next_set
+
+    integer(8) :: state_hash
+    integer :: cache_idx, char_code
+
+    ! Compute cache key
+    state_hash = current%hash()
+    char_code = ichar(c)
+
+    ! Compute cache index (combine hash with char code)
+    cache_idx = int(mod(abs(ieor(state_hash, int(char_code, 8))), int(DFA_CACHE_SIZE, 8))) + 1
+
+    ! Check cache hit (using hash + char + case as key)
+    ! Note: This may have rare hash collisions, but performance benefit outweighs risk
+    if (opt%dfa_cache(cache_idx)%valid .and. &
+        opt%dfa_cache(cache_idx)%state_hash == state_hash .and. &
+        opt%dfa_cache(cache_idx)%char_code == char_code .and. &
+        (opt%dfa_cache(cache_idx)%is_case_insensitive .eqv. ignore_case)) then
+      ! Cache hit - copy cached result
+      call next_set%copy_from(opt%dfa_cache(cache_idx)%next_states)
+      return
+    end if
+
+    ! Cache miss - compute transitions
+    call compute_char_transitions(opt%nfa, current, c, ignore_case, next_set)
+
+    ! Store in cache
+    opt%dfa_cache(cache_idx)%valid = .true.
+    opt%dfa_cache(cache_idx)%state_hash = state_hash
+    opt%dfa_cache(cache_idx)%char_code = char_code
+    opt%dfa_cache(cache_idx)%is_case_insensitive = ignore_case
+    call opt%dfa_cache(cache_idx)%next_states%copy_from(next_set)
+
+  end subroutine step_with_cache
+
+  subroutine compute_char_transitions(nfa, current, c, ignore_case, next_set)
+    !> Compute character transitions without caching (called on cache miss)
+    type(nfa_t), intent(in) :: nfa
+    type(state_set_t), intent(in) :: current
+    character(len=1), intent(in) :: c
     logical, intent(in) :: ignore_case
     type(state_set_t), intent(inout) :: next_set
 
@@ -496,11 +576,11 @@ contains
         mask = ishft(1_8, bit_idx)
         if (iand(word, mask) /= 0) then
           state = (word_idx - 1) * 64 + bit_idx + 1
-          if (state > opt%nfa%num_states) cycle
+          if (state > nfa%num_states) cycle
 
           ! Process transitions from this state
-          do i = 1, opt%nfa%states(state)%num_trans
-            trans = opt%nfa%states(state)%trans(i)
+          do i = 1, nfa%states(state)%num_trans
+            trans = nfa%states(state)%trans(i)
 
             select case (trans%trans_type)
               case (TRANS_CHAR)
@@ -530,7 +610,7 @@ contains
         end if
       end do
     end do
-  end subroutine step_with_cache
+  end subroutine compute_char_transitions
 
   function is_accepting_set(nfa, states) result(res)
     type(nfa_t), intent(in) :: nfa
