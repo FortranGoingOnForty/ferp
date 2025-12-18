@@ -5,11 +5,11 @@
 FC = gfortran
 
 # Compiler flags
-FFLAGS_COMMON = -std=f2008 -Wall -Wextra -pedantic
+FFLAGS_COMMON = -std=f2008 -Wall -Wextra -pedantic -cpp
 FFLAGS_DEBUG = $(FFLAGS_COMMON) -g -O0 -fcheck=all -fbacktrace -Wno-unused-dummy-argument
-FFLAGS_RELEASE = $(FFLAGS_COMMON) -O2 -march=native
+FFLAGS_RELEASE = $(FFLAGS_COMMON) -O2 -march=native -fopenmp
 
-# Default to debug build
+# Default to debug build (release includes OpenMP)
 FFLAGS = $(FFLAGS_DEBUG)
 
 # PCRE2 library (required for -P option)

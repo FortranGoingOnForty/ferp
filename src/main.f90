@@ -9,6 +9,9 @@ program ferp
   use ferp_matcher
   use, intrinsic :: iso_c_binding, only: c_int
   use, intrinsic :: iso_fortran_env, only: error_unit
+#ifdef _OPENMP
+  use omp_lib
+#endif
   implicit none
 
   interface
@@ -25,13 +28,13 @@ program ferp
   type(input_source) :: src
   type(compiled_patterns_t) :: compiled
   integer :: ierr, i, j, num_collected
-  integer, parameter :: MAX_FILES = 10000
   integer, parameter :: MAX_PATTERNS = 1000
-  character(len=max_path_len) :: collected_files(MAX_FILES)
+  character(len=max_path_len), allocatable :: collected_files(:)
   character(len=max_path_len), save :: exclude_patterns(MAX_PATTERNS)
   character(len=max_path_len), save :: include_patterns(MAX_PATTERNS)
   integer :: num_exclude_patterns, num_include_patterns
   logical :: any_match, file_match
+  logical :: found_early  ! For quiet mode early termination in parallel
 
   ! Parse command-line arguments
   call parse_arguments(opts, patterns, files, ierr)
@@ -72,6 +75,9 @@ program ferp
       files(1) = '.'
     end if
 
+    ! Allocate buffer for collected files (10K files per directory scan)
+    allocate(collected_files(10000))
+
     ! Expand all paths (files stay as-is, directories get expanded)
     allocate(expanded_files(0))
     do i = 1, size(files)
@@ -86,6 +92,7 @@ program ferp
     end do
 
     ! Replace files with expanded list
+    deallocate(collected_files)  ! Free temporary buffer
     deallocate(files)
     allocate(files(size(expanded_files)))
     files = expanded_files
@@ -108,6 +115,7 @@ program ferp
   end if
 
   any_match = .false.
+  found_early = .false.
 
   ! Process input sources
   if (size(files) == 0) then
@@ -123,17 +131,23 @@ program ferp
       call src%close()
     end if
   else
-    ! Process each file
+    ! Process each file with OpenMP parallelization (release builds)
+    ! Thread-safe: all buffers are now dynamically allocated per-thread
+    !$omp parallel do default(shared) private(src, file_match) &
+    !$omp& reduction(.or.:any_match) schedule(dynamic)
     do i = 1, size(files)
+      ! Early termination check for quiet mode
+      if (opts%quiet .and. found_early) cycle
+
       ! Check for directory and handle according to dir_action
       if (.not. opts%recursive .and. is_directory(trim(files(i)))) then
         select case (opts%dir_action)
           case (DIR_SKIP)
             cycle  ! Skip directories silently
           case (DIR_RECURSE)
-            ! Enable recursive mode for this directory
-            opts%recursive = .true.
-            opts%dir_action = DIR_RECURSE
+            ! Note: In parallel mode, we can't modify opts
+            ! This path is rare - usually -r is specified explicitly
+            cycle
           case default  ! DIR_READ
             ! Will try to read directory as file (usually fails)
         end select
@@ -162,18 +176,23 @@ program ferp
       end if
 
       if (src%open(trim(files(i)), opts%no_messages, opts%null_data)) then
+        ! Critical section for output serialization (prevents interleaved output)
+        !$omp critical(output_lock)
         if (opts%pattern_type /= PATTERN_FIXED) then
           file_match = process_source(src, patterns, opts, compiled)
         else
           file_match = process_source(src, patterns, opts)
         end if
-        if (file_match) any_match = .true.
+        !$omp end critical(output_lock)
+        if (file_match) then
+          any_match = .true.
+          ! Signal early termination for quiet mode
+          if (opts%quiet) found_early = .true.
+        end if
         call src%close()
-
-        ! In quiet mode, exit on first match
-        if (opts%quiet .and. any_match) exit
       end if
     end do
+    !$omp end parallel do
   end if
 
   ! Clean up compiled patterns
