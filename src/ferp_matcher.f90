@@ -5,6 +5,7 @@ module ferp_matcher
   use ferp_options
   use ferp_io
   use ferp_output
+  use ferp_search
   use regex_api
   use pcre_api
   implicit none
@@ -19,9 +20,11 @@ module ferp_matcher
   type :: compiled_patterns_t
     type(regex_t), allocatable :: regexes(:)
     type(pcre_t), allocatable :: pcres(:)       ! PCRE compiled patterns
+    type(bm_pattern_t), allocatable :: bm_pats(:)  ! Boyer-Moore patterns for fixed strings
     integer :: count = 0
     logical :: compiled = .false.
     logical :: is_pcre = .false.                ! True if using PCRE
+    logical :: is_fixed = .false.               ! True if using Boyer-Moore fixed strings
   end type compiled_patterns_t
 
   !> Context buffer entry - holds a line with its metadata
@@ -48,6 +51,25 @@ contains
     n = size(patterns)
     compiled%count = n
     compiled%is_pcre = (opts%pattern_type == PATTERN_PERL)
+    compiled%is_fixed = (opts%pattern_type == PATTERN_FIXED)
+
+    ! Use Boyer-Moore for fixed string patterns
+    if (compiled%is_fixed) then
+      allocate(compiled%bm_pats(n))
+
+      do i = 1, n
+        pattern = patterns(i)
+        ! For case-insensitive, convert pattern to lowercase
+        if (opts%ignore_case) then
+          call bm_compile(compiled%bm_pats(i), trim(pattern), .true.)
+        else
+          call bm_compile(compiled%bm_pats(i), trim(pattern), .false.)
+        end if
+      end do
+
+      compiled%compiled = .true.
+      return
+    end if
 
     ! Use PCRE for Perl-compatible patterns
     if (compiled%is_pcre) then
@@ -125,9 +147,17 @@ contains
       deallocate(compiled%pcres)
     end if
 
+    if (allocated(compiled%bm_pats)) then
+      do i = 1, compiled%count
+        call bm_free(compiled%bm_pats(i))
+      end do
+      deallocate(compiled%bm_pats)
+    end if
+
     compiled%count = 0
     compiled%compiled = .false.
     compiled%is_pcre = .false.
+    compiled%is_fixed = .false.
 
   end subroutine free_patterns
 
@@ -157,12 +187,18 @@ contains
       ! Match based on pattern type
       select case (opts%pattern_type)
         case (PATTERN_FIXED)
-          if (opts%ignore_case) then
-            search_pattern = to_lower(patterns(i))
+          ! Use Boyer-Moore if compiled patterns available
+          if (present(compiled) .and. compiled%compiled .and. compiled%is_fixed) then
+            matches = match_fixed_bm(line, compiled%bm_pats(i), opts)
           else
-            search_pattern = patterns(i)
+            ! Fallback to simple index search
+            if (opts%ignore_case) then
+              search_pattern = to_lower(patterns(i))
+            else
+              search_pattern = patterns(i)
+            end if
+            matches = match_fixed_string(search_line, search_pattern, opts)
           end if
-          matches = match_fixed_string(search_line, search_pattern, opts)
 
         case (PATTERN_BRE, PATTERN_ERE)
           if (present(compiled) .and. compiled%compiled) then
@@ -266,6 +302,45 @@ contains
     matches = .true.
 
   end function match_fixed_string
+
+  function match_fixed_bm(line, bm_pat, opts) result(matches)
+    !> Fixed string matching using Boyer-Moore algorithm
+    character(len=*), intent(in) :: line
+    type(bm_pattern_t), intent(in) :: bm_pat
+    type(grep_options), intent(in) :: opts
+    logical :: matches
+
+    integer :: pos
+    integer :: line_len, pat_len
+
+    matches = .false.
+    line_len = len_trim(line)
+    pat_len = bm_pat%pattern_len
+
+    if (pat_len == 0) then
+      ! Empty pattern matches everything
+      matches = .true.
+      return
+    end if
+
+    ! Find pattern using Boyer-Moore
+    pos = bm_search(line(1:line_len), bm_pat)
+
+    if (pos == 0) return
+
+    ! Check word boundary if -w
+    if (opts%word_regexp) then
+      if (.not. is_word_match(line, pos, pat_len)) return
+    end if
+
+    ! Check line match if -x
+    if (opts%line_regexp) then
+      if (pos /= 1 .or. pat_len /= line_len) return
+    end if
+
+    matches = .true.
+
+  end function match_fixed_bm
 
   function is_word_match(line, pos, pat_len) result(is_word)
     !> Check if match at pos is a whole word

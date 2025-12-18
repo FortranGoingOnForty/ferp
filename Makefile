@@ -39,9 +39,11 @@ REGEX_SRCS = $(REGEX_DIR)/regex_types.f90 \
 # Main source files (in dependency order)
 MAIN_SRCS = $(SRC_DIR)/ferp_kinds.f90 \
             $(SRC_DIR)/ferp_options.f90 \
+            $(SRC_DIR)/ferp_mmap.f90 \
             $(SRC_DIR)/ferp_io.f90 \
             $(SRC_DIR)/ferp_output.f90 \
             $(SRC_DIR)/ferp_dir.f90 \
+            $(SRC_DIR)/ferp_search.f90 \
             $(SRC_DIR)/ferp_cli.f90 \
             $(SRC_DIR)/ferp_matcher.f90 \
             $(SRC_DIR)/main.f90
@@ -91,11 +93,13 @@ $(BUILD_DIR)/pcre_api.o:
 
 # Main module dependencies
 $(BUILD_DIR)/ferp_options.o: $(BUILD_DIR)/ferp_kinds.o
-$(BUILD_DIR)/ferp_io.o: $(BUILD_DIR)/ferp_kinds.o
+$(BUILD_DIR)/ferp_mmap.o: $(BUILD_DIR)/ferp_kinds.o
+$(BUILD_DIR)/ferp_io.o: $(BUILD_DIR)/ferp_kinds.o $(BUILD_DIR)/ferp_mmap.o
 $(BUILD_DIR)/ferp_output.o: $(BUILD_DIR)/ferp_kinds.o $(BUILD_DIR)/ferp_options.o
 $(BUILD_DIR)/ferp_dir.o: $(BUILD_DIR)/ferp_kinds.o
+$(BUILD_DIR)/ferp_search.o: $(BUILD_DIR)/ferp_kinds.o
 $(BUILD_DIR)/ferp_cli.o: $(BUILD_DIR)/ferp_kinds.o $(BUILD_DIR)/ferp_options.o
-$(BUILD_DIR)/ferp_matcher.o: $(BUILD_DIR)/ferp_kinds.o $(BUILD_DIR)/ferp_options.o $(BUILD_DIR)/ferp_io.o $(BUILD_DIR)/ferp_output.o $(BUILD_DIR)/regex_api.o $(BUILD_DIR)/pcre_api.o
+$(BUILD_DIR)/ferp_matcher.o: $(BUILD_DIR)/ferp_kinds.o $(BUILD_DIR)/ferp_options.o $(BUILD_DIR)/ferp_io.o $(BUILD_DIR)/ferp_output.o $(BUILD_DIR)/ferp_search.o $(BUILD_DIR)/regex_api.o $(BUILD_DIR)/pcre_api.o
 $(BUILD_DIR)/main.o: $(BUILD_DIR)/ferp_kinds.o $(BUILD_DIR)/ferp_options.o $(BUILD_DIR)/ferp_cli.o $(BUILD_DIR)/ferp_io.o $(BUILD_DIR)/ferp_dir.o $(BUILD_DIR)/ferp_matcher.o
 
 # Clean build artifacts

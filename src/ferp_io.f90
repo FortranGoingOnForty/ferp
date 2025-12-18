@@ -1,17 +1,20 @@
 module ferp_io
   !> File I/O handling for FERP
   !> Supports dynamic line length (no fixed limit)
+  !> Uses memory-mapped I/O for improved performance on files
   use ferp_kinds
+  use ferp_mmap
   use, intrinsic :: iso_fortran_env, only: input_unit, error_unit, iostat_end, iostat_eor
   implicit none
   private
 
   public :: input_source
-  public :: SOURCE_STDIN, SOURCE_FILE
+  public :: SOURCE_STDIN, SOURCE_FILE, SOURCE_MMAP
   public :: check_binary_file
 
   integer, parameter :: SOURCE_STDIN = 1
   integer, parameter :: SOURCE_FILE = 2
+  integer, parameter :: SOURCE_MMAP = 3
 
   type :: input_source
     integer :: source_type = SOURCE_STDIN
@@ -23,6 +26,7 @@ module ferp_io
     logical :: is_binary = .false.
     logical :: eof_reached = .false.
     logical :: null_data_mode = .false.
+    type(mmap_file_t) :: mmap_file  ! Memory-mapped file handle
   contains
     procedure :: open => source_open
     procedure :: close => source_close
@@ -68,17 +72,36 @@ contains
       return
     end if
 
-    this%source_type = SOURCE_FILE
     this%filename = filename
 
-    ! Open file - use stream access for null-data mode, otherwise sequential
+    ! For null-data mode, use stream access (can't use mmap easily)
     if (this%null_data_mode) then
+      this%source_type = SOURCE_FILE
       open(newunit=this%unit_num, file=filename, status='old', action='read', &
            access='stream', form='unformatted', iostat=ios, iomsg=errmsg)
-    else
-      open(newunit=this%unit_num, file=filename, status='old', action='read', &
-           iostat=ios, iomsg=errmsg)
+      if (ios /= 0) then
+        if (.not. quiet) then
+          write(error_unit, '(A)') 'ferp: ' // trim(filename) // ': ' // trim(errmsg)
+        end if
+        return
+      end if
+      this%is_open = .true.
+      success = .true.
+      return
     end if
+
+    ! Try memory-mapped I/O first (fastest for regular files)
+    if (this%mmap_file%open(filename)) then
+      this%source_type = SOURCE_MMAP
+      this%is_open = .true.
+      success = .true.
+      return
+    end if
+
+    ! Fall back to standard Fortran I/O
+    this%source_type = SOURCE_FILE
+    open(newunit=this%unit_num, file=filename, status='old', action='read', &
+         iostat=ios, iomsg=errmsg)
 
     if (ios /= 0) then
       if (.not. quiet) then
@@ -96,8 +119,12 @@ contains
     !> Close the input source
     class(input_source), intent(inout) :: this
 
-    if (this%is_open .and. this%source_type == SOURCE_FILE) then
-      close(this%unit_num)
+    if (this%is_open) then
+      if (this%source_type == SOURCE_FILE) then
+        close(this%unit_num)
+      else if (this%source_type == SOURCE_MMAP) then
+        call this%mmap_file%close()
+      end if
     end if
 
     this%is_open = .false.
@@ -105,7 +132,7 @@ contains
 
   function source_read_line_dynamic(this, line, line_num, byte_off) result(success)
     !> Read a line from the input source with dynamic allocation
-    !> Uses a fixed read buffer but returns an allocatable string (thread-safe)
+    !> Uses mmap for files, standard I/O for stdin
     class(input_source), intent(inout) :: this
     character(len=:), allocatable, intent(out) :: line
     integer, intent(out) :: line_num
@@ -125,7 +152,14 @@ contains
 
     if (.not. this%is_open .or. this%eof_reached) return
 
-    ! Read line using standard Fortran I/O
+    ! Use mmap for memory-mapped files (fastest path)
+    if (this%source_type == SOURCE_MMAP) then
+      success = this%mmap_file%read_line(line, line_num, byte_off)
+      if (.not. success) this%eof_reached = .true.
+      return
+    end if
+
+    ! Standard Fortran I/O for stdin and fallback
     read(this%unit_num, '(A)', iostat=ios) buffer
 
     if (ios == iostat_end) then

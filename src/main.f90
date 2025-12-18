@@ -105,13 +105,11 @@ program ferp
     end if
   end if
 
-  ! Compile patterns for regex modes
-  if (opts%pattern_type /= PATTERN_FIXED) then
-    call compile_patterns(patterns, opts, compiled, ierr)
-    if (ierr /= 0) then
-      write(error_unit, '(A)') 'ferp: Invalid regular expression'
-      call c_exit(2_c_int)
-    end if
+  ! Compile patterns (for all modes - regex uses NFA/PCRE, fixed uses Boyer-Moore)
+  call compile_patterns(patterns, opts, compiled, ierr)
+  if (ierr /= 0) then
+    write(error_unit, '(A)') 'ferp: Invalid regular expression'
+    call c_exit(2_c_int)
   end if
 
   any_match = .false.
@@ -123,11 +121,7 @@ program ferp
     opts%reading_stdin = .true.
     if (src%open('-', null_data=opts%null_data)) then
       src%filename = opts%label  ! Use --label if provided
-      if (opts%pattern_type /= PATTERN_FIXED) then
-        any_match = process_source(src, patterns, opts, compiled)
-      else
-        any_match = process_source(src, patterns, opts)
-      end if
+      any_match = process_source(src, patterns, opts, compiled)
       call src%close()
     end if
   else
@@ -178,11 +172,7 @@ program ferp
       if (src%open(trim(files(i)), opts%no_messages, opts%null_data)) then
         ! Critical section for output serialization (prevents interleaved output)
         !$omp critical(output_lock)
-        if (opts%pattern_type /= PATTERN_FIXED) then
-          file_match = process_source(src, patterns, opts, compiled)
-        else
-          file_match = process_source(src, patterns, opts)
-        end if
+        file_match = process_source(src, patterns, opts, compiled)
         !$omp end critical(output_lock)
         if (file_match) then
           any_match = .true.
@@ -196,9 +186,7 @@ program ferp
   end if
 
   ! Clean up compiled patterns
-  if (opts%pattern_type /= PATTERN_FIXED) then
-    call free_patterns(compiled)
-  end if
+  call free_patterns(compiled)
 
   ! Exit with appropriate code
   ! 0 = match found, 1 = no match, 2 = error
