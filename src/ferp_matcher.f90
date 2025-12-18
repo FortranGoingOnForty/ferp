@@ -1,5 +1,6 @@
 module ferp_matcher
   !> Pattern matching orchestration for FERP
+  !> Thread-safe: no SAVE variables, all buffers are dynamically allocated
   use ferp_kinds
   use ferp_options
   use ferp_io
@@ -22,6 +23,13 @@ module ferp_matcher
     logical :: compiled = .false.
     logical :: is_pcre = .false.                ! True if using PCRE
   end type compiled_patterns_t
+
+  !> Context buffer entry - holds a line with its metadata
+  type :: context_entry_t
+    character(len=:), allocatable :: text
+    integer :: line_num = 0
+    integer(i64) :: byte_off = 0
+  end type context_entry_t
 
 contains
 
@@ -132,7 +140,7 @@ contains
     logical :: matches
 
     integer :: i
-    character(len=max_line_len) :: search_line
+    character(len=:), allocatable :: search_line
     character(len=max_pattern_len) :: search_pattern
 
     matches = .false.
@@ -335,7 +343,7 @@ contains
     integer :: i, pos, line_len
     type(match_result_t) :: res
     type(pcre_match_result_t) :: pcre_res
-    character(len=max_line_len) :: search_line
+    character(len=:), allocatable :: search_line
     character(len=max_pattern_len) :: search_pattern
 
     num_matches = 0
@@ -437,13 +445,14 @@ contains
 
   function process_source(src, patterns, opts, compiled) result(found_match)
     !> Process a single input source, return true if any matches found
+    !> Thread-safe: all buffers are locally allocated (no SAVE variables)
     type(input_source), intent(inout) :: src
     character(len=max_pattern_len), intent(in) :: patterns(:)
     type(grep_options), intent(inout) :: opts
     type(compiled_patterns_t), intent(in), optional :: compiled
     logical :: found_match
 
-    character(len=max_line_len) :: line
+    character(len=:), allocatable :: line
     integer :: line_num
     integer(i64) :: byte_off
     integer :: match_count
@@ -456,11 +465,8 @@ contains
     integer :: match_ends(MAX_MATCHES_PER_LINE)
     integer :: num_matches, j
 
-    ! For context lines (SAVE used for large arrays - safe since not recursive/concurrent)
-    integer, parameter :: MAX_CONTEXT = 100
-    character(len=max_line_len), save :: before_buffer(MAX_CONTEXT)
-    integer, save :: before_line_nums(MAX_CONTEXT)
-    integer(i64), save :: before_byte_offs(MAX_CONTEXT)
+    ! For context lines - dynamically allocated (thread-safe)
+    type(context_entry_t), allocatable :: before_buffer(:)
     integer :: buf_start, buf_count, buf_idx
     integer :: after_remaining  ! Lines of after-context still to print
     integer :: last_printed_line  ! Last line number we printed
@@ -478,17 +484,20 @@ contains
     need_separator = .false.
     use_context = (opts%before_context > 0 .or. opts%after_context > 0)
 
-    ! Note: Binary detection is now done in main.f90 BEFORE opening the file
-    ! src%is_binary is already set by the caller
+    ! Allocate context buffer if needed
+    if (use_context .and. opts%before_context > 0) then
+      allocate(before_buffer(opts%before_context))
+    end if
 
     ! Process lines
     do
-      ! Read next line (use null-data mode if enabled)
+      ! Read next line with dynamic allocation (no length limit)
       if (opts%null_data) then
-        if (.not. src%read_line_null(line, line_num, byte_off)) exit
+        if (.not. src%read_line_null_dynamic(line, line_num, byte_off)) exit
       else
-        if (.not. src%read_line(line, line_num, byte_off)) exit
+        if (.not. src%read_line_dynamic(line, line_num, byte_off)) exit
       end if
+
       if (present(compiled)) then
         line_matched = match_line(line, patterns, opts, compiled)
       else
@@ -510,9 +519,11 @@ contains
 
         ! Handle different output modes
         if (opts%quiet) then
+          if (allocated(before_buffer)) deallocate(before_buffer)
           return
         else if (opts%files_with_matches) then
           call print_filename(src%filename, opts)
+          if (allocated(before_buffer)) deallocate(before_buffer)
           return
         else if (opts%only_matching) then
           if (present(compiled)) then
@@ -529,10 +540,9 @@ contains
           ! Context and normal mode
           if (use_context) then
             ! Determine first line we'll print (for separator check)
-            ! It's either the first buffered line or the match line
             if (buf_count > 0 .and. opts%before_context > 0) then
               buf_idx = mod(buf_start - 1, buf_count) + 1
-              k = before_line_nums(buf_idx)  ! First buffered line number
+              k = before_buffer(buf_idx)%line_num  ! First buffered line number
             else
               k = line_num
             end if
@@ -549,10 +559,10 @@ contains
               do k = 0, buf_count - 1
                 ! Read from buffer in order: oldest to newest
                 buf_idx = mod(buf_start + k - 1, buf_count) + 1
-                if (before_line_nums(buf_idx) > last_printed_line) then
-                  call print_context_line(before_buffer(buf_idx), src%filename, &
-                       before_line_nums(buf_idx), before_byte_offs(buf_idx), opts)
-                  last_printed_line = before_line_nums(buf_idx)
+                if (before_buffer(buf_idx)%line_num > last_printed_line) then
+                  call print_context_line(before_buffer(buf_idx)%text, src%filename, &
+                       before_buffer(buf_idx)%line_num, before_buffer(buf_idx)%byte_off, opts)
+                  last_printed_line = before_buffer(buf_idx)%line_num
                 end if
               end do
               ! Clear buffer after printing
@@ -600,8 +610,7 @@ contains
             last_printed_line = line_num
             after_remaining = after_remaining - 1
           else if (opts%before_context > 0) then
-            ! Store in before-context buffer (only when not printing after-context)
-            ! Use circular buffer
+            ! Store in before-context buffer (circular buffer)
             if (buf_count < opts%before_context) then
               buf_count = buf_count + 1
               buf_idx = buf_count
@@ -610,9 +619,9 @@ contains
               buf_idx = buf_start
               buf_start = mod(buf_start, opts%before_context) + 1
             end if
-            before_buffer(buf_idx) = line
-            before_line_nums(buf_idx) = line_num
-            before_byte_offs(buf_idx) = byte_off
+            before_buffer(buf_idx)%text = line
+            before_buffer(buf_idx)%line_num = line_num
+            before_buffer(buf_idx)%byte_off = byte_off
           end if
         end if
       end if
@@ -627,6 +636,9 @@ contains
     if (opts%files_without_match .and. .not. found_match) then
       call print_filename(src%filename, opts)
     end if
+
+    ! Clean up
+    if (allocated(before_buffer)) deallocate(before_buffer)
 
   end function process_source
 
