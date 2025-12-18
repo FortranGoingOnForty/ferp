@@ -75,8 +75,8 @@ program ferp
       files(1) = '.'
     end if
 
-    ! Allocate buffer for collected files (10K files per directory scan)
-    allocate(collected_files(10000))
+    ! Allocate buffer for collected files (100K files per directory scan)
+    allocate(collected_files(100000))
 
     ! Expand all paths (files stay as-is, directories get expanded)
     allocate(expanded_files(0))

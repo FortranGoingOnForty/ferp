@@ -105,8 +105,9 @@ contains
     character(len=max_path_len), intent(in) :: exclude_dirs(:)
     integer, intent(in) :: num_exclude_dirs
 
-    ! SAVE used for large array - safe since not recursive/concurrent
-    integer, parameter :: MAX_DEPTH = 100
+    ! SAVE used for large array - safe since file collection runs before parallel section
+    ! MAX_DEPTH is the max number of directories that can be queued at once (not depth)
+    integer, parameter :: MAX_DEPTH = 10000
     character(len=max_path_len), save :: dir_stack(MAX_DEPTH)
     integer :: stack_top
     character(len=max_path_len) :: current_dir, entry_path, entry_name
