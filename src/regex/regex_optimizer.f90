@@ -456,6 +456,9 @@ contains
       end do
     end do
 
+    ! Minimize DFA to reduce state count
+    call minimize_dfa(opt%dfa)
+
     opt%dfa%compiled = .true.
     opt%use_dfa = .true.
 
@@ -497,6 +500,240 @@ contains
     dfa%states(idx)%transitions = DFA_DEAD_STATE
 
   end function find_or_create_dfa_state
+
+  subroutine minimize_dfa(dfa)
+    !> Minimize DFA using Hopcroft's algorithm
+    !> Merges equivalent states to reduce DFA size
+    type(compiled_dfa_t), intent(inout) :: dfa
+
+    integer :: num_states, num_partitions
+    integer, allocatable :: partition(:)      ! partition(state) = partition ID
+    integer, allocatable :: part_size(:)      ! Size of each partition
+    integer, allocatable :: representative(:) ! Representative state for each partition
+    integer, allocatable :: new_state_id(:)   ! Mapping from old state to new state ID
+    type(dfa_state_t), allocatable :: new_states(:)
+
+    logical, allocatable :: in_worklist(:)    ! Is partition in worklist?
+    integer, allocatable :: worklist(:)       ! Partitions to process
+    integer :: work_head, work_tail
+
+    integer :: i, c, state, target, part_id
+    integer :: num_accept, num_reject
+    integer :: old_part, new_part_id
+    logical :: needs_split
+    integer, allocatable :: split_marker(:)   ! Which states go to partition A on char c
+    integer :: new_num_states
+
+    num_states = dfa%num_states
+    if (num_states <= 1) return  ! Nothing to minimize
+
+    ! Allocate working arrays
+    allocate(partition(num_states))
+    allocate(part_size(num_states))
+    allocate(representative(num_states))
+    allocate(new_state_id(num_states))
+    allocate(in_worklist(num_states))
+    allocate(worklist(num_states))
+    allocate(split_marker(num_states))
+
+    ! Initialize partitions: accepting states = partition 1, non-accepting = partition 2
+    partition = 0
+    part_size = 0
+    num_accept = 0
+    num_reject = 0
+
+    do i = 1, num_states
+      if (dfa%states(i)%is_accept) then
+        partition(i) = 1
+        num_accept = num_accept + 1
+      else
+        partition(i) = 2
+        num_reject = num_reject + 1
+      end if
+    end do
+
+    part_size(1) = num_accept
+    part_size(2) = num_reject
+    num_partitions = 2
+
+    ! Handle edge case: all accepting or all rejecting
+    if (num_accept == 0 .or. num_reject == 0) then
+      num_partitions = 1
+      partition = 1
+      part_size(1) = num_states
+    end if
+
+    ! Initialize worklist with smaller partition (Hopcroft optimization)
+    in_worklist = .false.
+    work_head = 1
+    work_tail = 0
+
+    if (num_partitions == 2) then
+      if (num_accept <= num_reject) then
+        work_tail = 1
+        worklist(1) = 1
+        in_worklist(1) = .true.
+      else
+        work_tail = 1
+        worklist(1) = 2
+        in_worklist(2) = .true.
+      end if
+    end if
+
+    ! Main refinement loop
+    do while (work_head <= work_tail)
+      part_id = worklist(work_head)
+      work_head = work_head + 1
+      in_worklist(part_id) = .false.
+
+      ! For each character, check if this partition splits others
+      do c = 0, 255
+        ! Mark states that transition to partition part_id on character c
+        split_marker = 0
+        do state = 1, num_states
+          target = dfa%states(state)%transitions(c)
+          if (target > 0 .and. target <= num_states) then
+            if (partition(target) == part_id) then
+              split_marker(state) = 1
+            end if
+          end if
+        end do
+
+        ! Check each existing partition for splits
+        do old_part = 1, num_partitions
+          ! Count states in this partition that go to part_id vs don't
+          num_accept = 0  ! Reuse: count going to part_id
+          num_reject = 0  ! Reuse: count not going to part_id
+
+          do state = 1, num_states
+            if (partition(state) == old_part) then
+              if (split_marker(state) == 1) then
+                num_accept = num_accept + 1
+              else
+                num_reject = num_reject + 1
+              end if
+            end if
+          end do
+
+          ! If partition needs splitting (has both types)
+          needs_split = (num_accept > 0 .and. num_reject > 0)
+
+          if (needs_split) then
+            ! Create new partition for the smaller group
+            num_partitions = num_partitions + 1
+            new_part_id = num_partitions
+
+            ! Move the smaller group to new partition
+            if (num_accept <= num_reject) then
+              ! Move states going to part_id to new partition
+              do state = 1, num_states
+                if (partition(state) == old_part .and. split_marker(state) == 1) then
+                  partition(state) = new_part_id
+                end if
+              end do
+              part_size(new_part_id) = num_accept
+              part_size(old_part) = num_reject
+            else
+              ! Move states NOT going to part_id to new partition
+              do state = 1, num_states
+                if (partition(state) == old_part .and. split_marker(state) == 0) then
+                  partition(state) = new_part_id
+                end if
+              end do
+              part_size(new_part_id) = num_reject
+              part_size(old_part) = num_accept
+            end if
+
+            ! Update worklist
+            if (in_worklist(old_part)) then
+              ! Both halves need to be in worklist
+              work_tail = work_tail + 1
+              worklist(work_tail) = new_part_id
+              in_worklist(new_part_id) = .true.
+            else
+              ! Add smaller partition to worklist
+              if (part_size(new_part_id) <= part_size(old_part)) then
+                work_tail = work_tail + 1
+                worklist(work_tail) = new_part_id
+                in_worklist(new_part_id) = .true.
+              else
+                work_tail = work_tail + 1
+                worklist(work_tail) = old_part
+                in_worklist(old_part) = .true.
+              end if
+            end if
+          end if
+        end do
+      end do
+    end do
+
+    ! Check if minimization actually reduced states
+    if (num_partitions >= num_states) then
+      ! No reduction possible
+      deallocate(partition, part_size, representative, new_state_id)
+      deallocate(in_worklist, worklist, split_marker)
+      return
+    end if
+
+    ! Find representative for each partition (lowest numbered state)
+    representative = 0
+    do state = 1, num_states
+      part_id = partition(state)
+      if (representative(part_id) == 0) then
+        representative(part_id) = state
+      end if
+    end do
+
+    ! Build new state IDs (compact numbering)
+    new_state_id = 0
+    new_num_states = 0
+    do part_id = 1, num_partitions
+      if (representative(part_id) > 0) then
+        new_num_states = new_num_states + 1
+        ! Map all states in this partition to new state ID
+        do state = 1, num_states
+          if (partition(state) == part_id) then
+            new_state_id(state) = new_num_states
+          end if
+        end do
+      end if
+    end do
+
+    ! Build minimized DFA
+    allocate(new_states(new_num_states))
+
+    do part_id = 1, num_partitions
+      state = representative(part_id)
+      if (state == 0) cycle
+
+      i = new_state_id(state)
+      new_states(i)%is_accept = dfa%states(state)%is_accept
+      new_states(i)%state_hash = dfa%states(state)%state_hash
+      new_states(i)%nfa_states = dfa%states(state)%nfa_states
+
+      ! Remap transitions
+      do c = 0, 255
+        target = dfa%states(state)%transitions(c)
+        if (target > 0 .and. target <= num_states) then
+          new_states(i)%transitions(c) = new_state_id(target)
+        else
+          new_states(i)%transitions(c) = DFA_DEAD_STATE
+        end if
+      end do
+    end do
+
+    ! Update DFA with minimized version
+    deallocate(dfa%states)
+    allocate(dfa%states(new_num_states))
+    dfa%states = new_states
+    dfa%start_state = new_state_id(dfa%start_state)
+    dfa%num_states = new_num_states
+
+    ! Cleanup
+    deallocate(partition, part_size, representative, new_state_id)
+    deallocate(in_worklist, worklist, split_marker, new_states)
+
+  end subroutine minimize_dfa
 
   subroutine compute_char_transitions_simple(nfa, current, c, next_set)
     !> Compute character transitions without case folding (for DFA compilation)
