@@ -2,6 +2,7 @@ module regex_nfa
   !> Thompson NFA construction from AST
   !> Implements the classic Thompson construction algorithm
   use regex_types
+  use regex_charclass
   use regex_parser, only: ast_pool_t
   implicit none
   private
@@ -111,6 +112,8 @@ contains
         trans%trans_type = TRANS_CLASS
         trans%char_class = node%char_class
         trans%negated = node%negated
+        ! Pre-compute bitwise character class for fast matching
+        call charclass_from_array(trans%char_bits, node%char_class, node%negated)
         trans%target = s2
         call nfa%states(s1)%add_trans(trans)
 

@@ -33,7 +33,8 @@ BIN_DIR = .
 TARGET = $(BIN_DIR)/ferp
 
 # Regex source files (in dependency order)
-REGEX_SRCS = $(REGEX_DIR)/regex_types.f90 \
+REGEX_SRCS = $(REGEX_DIR)/regex_charclass.f90 \
+             $(REGEX_DIR)/regex_types.f90 \
              $(REGEX_DIR)/regex_lexer.f90 \
              $(REGEX_DIR)/regex_parser.f90 \
              $(REGEX_DIR)/regex_nfa.f90 \
@@ -102,12 +103,14 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Regex module dependencies
+$(BUILD_DIR)/regex_charclass.o:
+$(BUILD_DIR)/regex_types.o: $(BUILD_DIR)/regex_charclass.o
 $(BUILD_DIR)/regex_lexer.o: $(BUILD_DIR)/regex_types.o
 $(BUILD_DIR)/regex_parser.o: $(BUILD_DIR)/regex_types.o
-$(BUILD_DIR)/regex_nfa.o: $(BUILD_DIR)/regex_types.o $(BUILD_DIR)/regex_parser.o
+$(BUILD_DIR)/regex_nfa.o: $(BUILD_DIR)/regex_types.o $(BUILD_DIR)/regex_charclass.o $(BUILD_DIR)/regex_parser.o
 $(BUILD_DIR)/regex_engine.o: $(BUILD_DIR)/regex_types.o
 $(BUILD_DIR)/aho_corasick.o:
-$(BUILD_DIR)/regex_optimizer.o: $(BUILD_DIR)/regex_types.o $(BUILD_DIR)/aho_corasick.o
+$(BUILD_DIR)/regex_optimizer.o: $(BUILD_DIR)/regex_types.o $(BUILD_DIR)/regex_charclass.o $(BUILD_DIR)/aho_corasick.o
 $(BUILD_DIR)/regex_api.o: $(BUILD_DIR)/regex_types.o $(BUILD_DIR)/regex_lexer.o $(BUILD_DIR)/regex_parser.o $(BUILD_DIR)/regex_nfa.o $(BUILD_DIR)/regex_engine.o $(BUILD_DIR)/regex_optimizer.o
 $(BUILD_DIR)/pcre_api.o:
 

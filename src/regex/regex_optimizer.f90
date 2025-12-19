@@ -6,7 +6,9 @@ module regex_optimizer
   !>   - Lazy DFA state caching
   !>   - Anchored pattern fast paths
   !>   - Aho-Corasick for alternation patterns
+  !>   - Bitwise character class matching
   use regex_types
+  use regex_charclass
   use aho_corasick
   implicit none
   private
@@ -70,6 +72,7 @@ module regex_optimizer
     logical :: anchored_end = .false.            ! Pattern ends with $
     integer :: skip_table(0:255) = 0             ! Boyer-Moore skip table for prefix
     type(state_set_t) :: start_closure           ! Pre-computed start state epsilon closure
+    type(state_set_t), allocatable :: epsilon_closures(:)  ! Pre-computed epsilon closures per state
     type(dfa_cache_entry_t) :: dfa_cache(DFA_CACHE_SIZE)  ! Lazy DFA cache
     type(compiled_dfa_t) :: dfa                  ! Full compiled DFA (if available)
     logical :: use_dfa = .false.                 ! Use DFA instead of NFA
@@ -196,6 +199,9 @@ contains
 
     ! Pre-compute start state epsilon closure (position-independent part)
     call precompute_start_closure(opt)
+
+    ! Pre-compute epsilon closures for all states (for fast expansion)
+    call precompute_all_epsilon_closures(opt)
 
     ! Clear DFA cache
     opt%dfa_cache%valid = .false.
@@ -334,6 +340,27 @@ contains
     end do
   end subroutine compute_epsilon_closure_basic
 
+  subroutine precompute_all_epsilon_closures(opt)
+    !> Pre-compute epsilon closure for every NFA state
+    !> This allows O(1) closure lookup during matching instead of repeated traversal
+    type(optimized_nfa_t), intent(inout) :: opt
+
+    integer :: i, n
+
+    n = opt%nfa%num_states
+    if (n <= 0) return
+
+    ! Allocate epsilon closures array
+    if (allocated(opt%epsilon_closures)) deallocate(opt%epsilon_closures)
+    allocate(opt%epsilon_closures(n))
+
+    ! Compute epsilon closure for each state
+    do i = 1, n
+      call opt%epsilon_closures(i)%clear()
+      call compute_epsilon_closure_basic(opt%nfa, i, opt%epsilon_closures(i))
+    end do
+  end subroutine precompute_all_epsilon_closures
+
   function has_anchor_transitions(nfa) result(has_anchors)
     !> Check if NFA has any anchor transitions (position-dependent)
     !> These include ^, $, \<, \>, \b, \B
@@ -423,7 +450,7 @@ contains
 
         ! Compute epsilon closure of result
         if (.not. next_set%is_empty()) then
-          call expand_epsilon_closure_simple(opt%nfa, next_set)
+          call expand_epsilon_closure_simple(opt, next_set)
         end if
 
         if (next_set%is_empty()) then
@@ -781,8 +808,46 @@ contains
     end do
   end subroutine compute_char_transitions_simple
 
-  subroutine expand_epsilon_closure_simple(nfa, state_set)
+  subroutine expand_epsilon_closure_simple(opt, state_set)
     !> Expand state set to include epsilon closure (in-place)
+    !> Uses pre-computed closures for O(1) lookup per state
+    type(optimized_nfa_t), intent(in) :: opt
+    type(state_set_t), intent(inout) :: state_set
+
+    integer :: word_idx, bit_idx, state, j
+    integer(8) :: word, mask, original_bits(size(state_set%bits))
+
+    ! If no pre-computed closures, fall back to computing on-the-fly
+    if (.not. allocated(opt%epsilon_closures)) then
+      call expand_epsilon_closure_simple_fallback(opt%nfa, state_set)
+      return
+    end if
+
+    ! Save original bits to avoid processing newly added states
+    original_bits = state_set%bits
+
+    ! Expand using pre-computed closures - just OR the bit vectors
+    do word_idx = 1, size(original_bits)
+      word = original_bits(word_idx)
+      if (word == 0) cycle
+
+      do bit_idx = 0, 63
+        mask = ishft(1_8, bit_idx)
+        if (iand(word, mask) /= 0) then
+          state = (word_idx - 1) * 64 + bit_idx + 1
+          if (state >= 1 .and. state <= opt%nfa%num_states) then
+            ! Merge pre-computed epsilon closure using bitwise OR
+            do j = 1, size(state_set%bits)
+              state_set%bits(j) = ior(state_set%bits(j), opt%epsilon_closures(state)%bits(j))
+            end do
+          end if
+        end if
+      end do
+    end do
+  end subroutine expand_epsilon_closure_simple
+
+  subroutine expand_epsilon_closure_simple_fallback(nfa, state_set)
+    !> Fallback: compute epsilon closure on-the-fly
     type(nfa_t), intent(in) :: nfa
     type(state_set_t), intent(inout) :: state_set
 
@@ -808,7 +873,7 @@ contains
     end do
 
     call state_set%copy_from(result)
-  end subroutine expand_epsilon_closure_simple
+  end subroutine expand_epsilon_closure_simple_fallback
 
   !---------------------------------------------------------------------------
   ! Optimized Search: Use prefix to skip positions
@@ -1193,8 +1258,15 @@ contains
                 end if
 
               case (TRANS_CLASS)
-                if (char_in_class_opt(c, trans%char_class, trans%negated, ignore_case)) then
-                  call next_set%add(trans%target)
+                ! Use fast bitwise character class test
+                if (ignore_case) then
+                  if (charclass_test_case_insensitive(trans%char_bits, c)) then
+                    call next_set%add(trans%target)
+                  end if
+                else
+                  if (charclass_test(trans%char_bits, c)) then
+                    call next_set%add(trans%target)
+                  end if
                 end if
 
               case (TRANS_ANY)

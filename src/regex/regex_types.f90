@@ -1,6 +1,7 @@
 module regex_types
   !> Core data types for the FERP regex engine
   !> Defines tokens, AST nodes, and NFA structures
+  use regex_charclass
   implicit none
   private
 
@@ -129,7 +130,8 @@ module regex_types
   type :: nfa_transition_t
     integer :: trans_type = TRANS_EPSILON   ! Transition type
     character(len=1) :: match_char = ' '    ! For TRANS_CHAR
-    logical :: char_class(0:255) = .false.  ! For TRANS_CLASS
+    logical :: char_class(0:255) = .false.  ! For TRANS_CLASS (legacy)
+    type(char_class_bits_t) :: char_bits    ! Bitwise char class (fast)
     logical :: negated = .false.            ! For negated classes
     integer :: target = 0                   ! Target state index
 
