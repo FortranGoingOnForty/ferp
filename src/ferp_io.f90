@@ -11,6 +11,8 @@ module ferp_io
   public :: input_source
   public :: SOURCE_STDIN, SOURCE_FILE, SOURCE_MMAP
   public :: check_binary_file
+  ! Re-export batch types from ferp_mmap
+  public :: line_info_t, line_batch_t, BATCH_SIZE
 
   integer, parameter :: SOURCE_STDIN = 1
   integer, parameter :: SOURCE_FILE = 2
@@ -32,6 +34,8 @@ module ferp_io
     procedure :: close => source_close
     procedure :: read_line_dynamic => source_read_line_dynamic
     procedure :: read_line_null_dynamic => source_read_line_null_dynamic
+    procedure :: read_lines_batch => source_read_lines_batch
+    procedure :: get_line_text => source_get_line_text
     procedure :: check_binary => source_check_binary
   end type input_source
 
@@ -359,5 +363,39 @@ contains
     this%is_binary = check_binary_file(trim(this%filename))
 
   end subroutine source_check_binary
+
+  function source_read_lines_batch(this, batch) result(success)
+    !> Read multiple lines as a batch (wrapper for mmap batch read)
+    !> Only works for mmap sources; returns false for stdin/file
+    class(input_source), intent(inout) :: this
+    type(line_batch_t), intent(out) :: batch
+    logical :: success
+
+    success = .false.
+    batch%count = 0
+
+    if (.not. this%is_open .or. this%eof_reached) return
+
+    ! Only mmap sources support batch reading
+    if (this%source_type == SOURCE_MMAP) then
+      success = this%mmap_file%read_lines_batch(batch)
+      if (.not. success) this%eof_reached = .true.
+    end if
+
+  end function source_read_lines_batch
+
+  function source_get_line_text(this, info) result(line)
+    !> Get line text from mmap given line info (wrapper)
+    class(input_source), intent(in) :: this
+    type(line_info_t), intent(in) :: info
+    character(len=:), allocatable :: line
+
+    if (this%source_type == SOURCE_MMAP) then
+      line = this%mmap_file%get_line_text(info)
+    else
+      line = ''
+    end if
+
+  end function source_get_line_text
 
 end module ferp_io

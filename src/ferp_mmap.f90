@@ -10,11 +10,30 @@ module ferp_mmap
 
   public :: mmap_file_t
   public :: mmap_open, mmap_close, mmap_get_line
+  public :: line_info_t, line_batch_t
+  public :: BATCH_SIZE
 
   ! POSIX constants
   integer(c_int), parameter :: PROT_READ = 1
   integer(c_int), parameter :: MAP_PRIVATE = 2
   integer(c_int), parameter :: MAP_FAILED = -1
+
+  ! Batch processing constants
+  integer, parameter :: BATCH_SIZE = 256  ! Number of lines per batch
+
+  !> Line info for batch processing (pointers into mmap'd memory)
+  type :: line_info_t
+    integer(c_size_t) :: start_pos = 0    ! Start position in mmap (0-based)
+    integer(c_size_t) :: length = 0       ! Length of line (excluding newline)
+    integer :: line_num = 0               ! Line number (1-based)
+    integer(i64) :: byte_off = 0          ! Byte offset in file
+  end type line_info_t
+
+  !> Batch of line info for bulk processing
+  type :: line_batch_t
+    type(line_info_t) :: lines(BATCH_SIZE)
+    integer :: count = 0                  ! Number of valid lines in batch
+  end type line_batch_t
 
   ! C interfaces
   interface
@@ -82,6 +101,8 @@ module ferp_mmap
     procedure :: open => mmap_open_method
     procedure :: close => mmap_close_method
     procedure :: read_line => mmap_read_line
+    procedure :: read_lines_batch => mmap_read_lines_batch
+    procedure :: get_line_text => mmap_get_line_text
     procedure :: reset => mmap_reset
   end type mmap_file_t
 
@@ -262,5 +283,104 @@ contains
     success = .true.
 
   end function mmap_read_line
+
+  function mmap_read_lines_batch(this, batch) result(success)
+    !> Read up to BATCH_SIZE lines from memory-mapped file
+    !> Returns line positions without copying data (zero-copy batch read)
+    class(mmap_file_t), intent(inout) :: this
+    type(line_batch_t), intent(out) :: batch
+    logical :: success
+
+    character(len=1, kind=c_char), pointer :: file_data(:)
+    integer(c_size_t) :: start_pos, end_pos, line_len
+    integer(c_int64_t) :: newline_pos
+    integer :: i
+
+    success = .false.
+    batch%count = 0
+
+    if (.not. this%is_open) return
+    if (this%pos >= this%size) return
+    if (.not. c_associated(this%data)) return
+
+    ! Map the C pointer to a Fortran character array
+    call c_f_pointer(this%data, file_data, [this%size])
+
+    ! Read up to BATCH_SIZE lines
+    do i = 1, BATCH_SIZE
+      if (this%pos >= this%size) exit
+
+      start_pos = this%pos  ! 0-based position
+
+      ! Use SIMD to find newline
+      newline_pos = simd_find_char_ptr(this%data, int(this%size, c_int64_t), &
+                                        int(this%pos, c_int64_t), char(10))
+
+      if (newline_pos < 0) then
+        ! No newline found - rest of file is the line
+        end_pos = this%size
+      else
+        end_pos = int(newline_pos, c_size_t)
+      end if
+
+      ! Calculate line length (excluding newline and CR)
+      line_len = end_pos - start_pos
+      if (line_len > 0 .and. end_pos > start_pos) then
+        ! Check for CR before LF (Windows line ending)
+        if (file_data(end_pos) == char(13)) then
+          line_len = line_len - 1
+        end if
+      end if
+
+      ! Store line info
+      batch%count = batch%count + 1
+      batch%lines(batch%count)%start_pos = start_pos
+      batch%lines(batch%count)%length = line_len
+      this%line_number = this%line_number + 1
+      batch%lines(batch%count)%line_num = this%line_number
+      batch%lines(batch%count)%byte_off = int(start_pos, i64)
+
+      ! Move past the newline
+      if (end_pos < this%size) then
+        this%pos = end_pos + 1  ! Position after newline (0-based)
+      else
+        this%pos = this%size
+      end if
+      this%byte_offset = int(this%pos, i64)
+    end do
+
+    success = (batch%count > 0)
+
+  end function mmap_read_lines_batch
+
+  function mmap_get_line_text(this, info) result(line)
+    !> Extract line text from mmap'd memory given line info
+    class(mmap_file_t), intent(in) :: this
+    type(line_info_t), intent(in) :: info
+    character(len=:), allocatable :: line
+
+    character(len=1, kind=c_char), pointer :: file_data(:)
+    integer :: i
+
+    if (.not. this%is_open .or. .not. c_associated(this%data)) then
+      line = ''
+      return
+    end if
+
+    if (info%length == 0) then
+      line = ''
+      return
+    end if
+
+    ! Map the C pointer to a Fortran character array
+    call c_f_pointer(this%data, file_data, [this%size])
+
+    ! Allocate and copy line (start_pos is 0-based, array is 1-based)
+    allocate(character(len=info%length) :: line)
+    do i = 1, int(info%length)
+      line(i:i) = file_data(info%start_pos + i)
+    end do
+
+  end function mmap_get_line_text
 
 end module ferp_mmap

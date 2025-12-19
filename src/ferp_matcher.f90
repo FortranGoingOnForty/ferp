@@ -405,6 +405,143 @@ contains
 
   end function to_lower
 
+  subroutine match_lines_batch(src, batch, patterns, opts, compiled, match_results)
+    !> Match a batch of lines against patterns
+    !> Returns array of match results (true/false for each line)
+    type(input_source), intent(in) :: src
+    type(line_batch_t), intent(in) :: batch
+    character(len=max_pattern_len), intent(in) :: patterns(:)
+    type(grep_options), intent(in) :: opts
+    type(compiled_patterns_t), intent(inout) :: compiled
+    logical, intent(out) :: match_results(BATCH_SIZE)
+
+    integer :: i
+    character(len=:), allocatable :: line
+
+    match_results = .false.
+
+    do i = 1, batch%count
+      ! Extract line text from mmap
+      line = src%get_line_text(batch%lines(i))
+      ! Match this line
+      match_results(i) = match_line(line, patterns, opts, compiled)
+    end do
+
+  end subroutine match_lines_batch
+
+  function can_use_batch_mode(src, opts) result(can_batch)
+    !> Check if we can use optimized batch processing
+    !> Batch mode works for simple cases without context lines or special modes
+    type(input_source), intent(in) :: src
+    type(grep_options), intent(in) :: opts
+    logical :: can_batch
+
+    can_batch = .false.
+
+    ! Must be mmap source (has the file in memory)
+    if (src%source_type /= SOURCE_MMAP) return
+
+    ! Can't use batch with context lines
+    if (opts%before_context > 0 .or. opts%after_context > 0) return
+
+    ! Can't use batch with invert match (need careful line tracking)
+    if (opts%invert_match) return
+
+    ! Can't use batch with only-matching mode
+    if (opts%only_matching) return
+
+    ! Can't use batch with files-without-match
+    if (opts%files_without_match) return
+
+    ! Can't use batch with null-data mode
+    if (opts%null_data) return
+
+    can_batch = .true.
+
+  end function can_use_batch_mode
+
+  function process_source_batch(src, patterns, opts, compiled) result(found_match)
+    !> Process a source using batch mode for improved performance
+    !> This is a fast path for simple search modes
+    type(input_source), intent(inout) :: src
+    character(len=max_pattern_len), intent(in) :: patterns(:)
+    type(grep_options), intent(inout) :: opts
+    type(compiled_patterns_t), intent(inout) :: compiled
+    logical :: found_match
+
+    type(line_batch_t) :: batch
+    logical :: match_results(BATCH_SIZE)
+    character(len=:), allocatable :: line
+    integer :: i, match_count
+    logical :: binary_matched
+
+    ! For color mode
+    integer, parameter :: MAX_MATCHES_PER_LINE = 100
+    integer :: match_starts(MAX_MATCHES_PER_LINE)
+    integer :: match_ends(MAX_MATCHES_PER_LINE)
+    integer :: num_matches
+
+    found_match = .false.
+    match_count = 0
+    binary_matched = .false.
+
+    ! Process batches until EOF
+    do while (src%read_lines_batch(batch))
+      ! Match all lines in batch
+      call match_lines_batch(src, batch, patterns, opts, compiled, match_results)
+
+      ! Process matches
+      do i = 1, batch%count
+        if (match_results(i)) then
+          found_match = .true.
+          match_count = match_count + 1
+
+          ! Handle binary files
+          if (src%is_binary .and. .not. opts%text_mode) then
+            if (.not. binary_matched) then
+              call print_binary_match(src%filename, opts)
+              binary_matched = .true.
+            end if
+            return
+          end if
+
+          ! Handle output modes
+          if (opts%quiet) then
+            return
+          else if (opts%files_with_matches) then
+            call print_filename(src%filename, opts)
+            return
+          else if (.not. opts%count_only) then
+            ! Get line text and print it
+            line = src%get_line_text(batch%lines(i))
+            if (opts%color_mode == COLOR_ALWAYS) then
+              call find_matches(line, patterns, opts, compiled, match_starts, match_ends, num_matches)
+              call print_match_colored(line, src%filename, batch%lines(i)%line_num, &
+                                       batch%lines(i)%byte_off, opts, match_starts, match_ends, num_matches)
+            else
+              call print_match(line, src%filename, batch%lines(i)%line_num, &
+                              batch%lines(i)%byte_off, opts)
+            end if
+          end if
+
+          ! Check max count
+          if (opts%max_count > 0 .and. match_count >= opts%max_count) then
+            if (opts%count_only) then
+              call print_count(match_count, src%filename, opts)
+            end if
+            return
+          end if
+        end if
+      end do
+    end do
+
+    ! Handle count mode
+    if (opts%count_only) then
+      call print_count(match_count, src%filename, opts)
+    end if
+
+  end function process_source_batch
+
   subroutine find_matches(line, patterns, opts, compiled, match_starts, match_ends, num_matches)
     !> Find all matches in a line, returning their positions
     !> For -o mode, this finds all non-overlapping matches
@@ -549,6 +686,12 @@ contains
     logical :: use_context
     integer :: k
 
+    ! Try optimized batch mode for simple cases
+    if (present(compiled) .and. compiled%compiled .and. can_use_batch_mode(src, opts)) then
+      found_match = process_source_batch(src, patterns, opts, compiled)
+      return
+    end if
+
     found_match = .false.
     match_count = 0
     binary_matched = .false.
@@ -564,7 +707,7 @@ contains
       allocate(before_buffer(opts%before_context))
     end if
 
-    ! Process lines
+    ! Process lines (line-by-line fallback)
     do
       ! Read next line with dynamic allocation (no length limit)
       if (opts%null_data) then
