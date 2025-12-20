@@ -1,0 +1,15 @@
+price is $100
+50% off
+path/to/file
+array[0]
+func()
+a+b=c
+a*b
+hello.world
+start^here
+end$there
+back\slash
+pipe|char
+question?
+curly{brace}
+(parens)
