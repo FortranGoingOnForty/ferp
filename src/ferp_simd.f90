@@ -48,7 +48,11 @@ contains
     character(len=1), intent(in) :: needle
     integer(c_int64_t) :: pos
 
-    pos = c_simd_find_char(buf_ptr, buf_len, start, needle)
+    character(kind=c_char) :: c_needle
+
+    ! Convert to C char kind explicitly
+    c_needle = char(ichar(needle), kind=c_char)
+    pos = c_simd_find_char(buf_ptr, buf_len, start, c_needle)
   end function simd_find_char_ptr
 
   function simd_find_char2_ptr(buf_ptr, buf_len, start, c1, c2) result(pos)
@@ -60,7 +64,12 @@ contains
     character(len=1), intent(in) :: c1, c2
     integer(c_int64_t) :: pos
 
-    pos = c_simd_find_char2(buf_ptr, buf_len, start, c1, c2)
+    character(kind=c_char) :: cc1, cc2
+
+    ! Convert to C char kind explicitly
+    cc1 = char(ichar(c1), kind=c_char)
+    cc2 = char(ichar(c2), kind=c_char)
+    pos = c_simd_find_char2(buf_ptr, buf_len, start, cc1, cc2)
   end function simd_find_char2_ptr
 
   function simd_count_char_ptr(buf_ptr, buf_len, needle) result(count)
@@ -70,7 +79,11 @@ contains
     character(len=1), intent(in) :: needle
     integer(c_int64_t) :: count
 
-    count = c_simd_count_char(buf_ptr, buf_len, needle)
+    character(kind=c_char) :: c_needle
+
+    ! Convert to C char kind explicitly
+    c_needle = char(ichar(needle), kind=c_char)
+    count = c_simd_count_char(buf_ptr, buf_len, c_needle)
   end function simd_count_char_ptr
 
 end module ferp_simd
