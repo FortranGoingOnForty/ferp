@@ -230,7 +230,12 @@ contains
 
     ! Read byte by byte until NUL or EOF
     do
-      read(this%unit_num, iostat=ios) ch
+      ! Use formatted read for stdin, unformatted for files
+      if (this%source_type == SOURCE_STDIN) then
+        read(this%unit_num, '(A1)', iostat=ios, advance='no') ch
+      else
+        read(this%unit_num, iostat=ios) ch
+      end if
 
       if (ios == iostat_end) then
         this%eof_reached = .true.

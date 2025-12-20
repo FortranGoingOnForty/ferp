@@ -561,17 +561,9 @@ contains
         call next_set%clear()
 
         ! Compute NFA transitions for this character
+        ! Note: DFA is case-sensitive. Case-insensitive matching uses NFA path.
         call compute_char_transitions_simple(opt%nfa, opt%dfa%states(dfa_idx)%nfa_states, &
                                              char(char_code), next_set)
-
-        ! For alphabetic characters, also compute transitions for opposite case
-        if (char_code >= ichar('a') .and. char_code <= ichar('z')) then
-          call compute_char_transitions_simple(opt%nfa, opt%dfa%states(dfa_idx)%nfa_states, &
-                                               char(char_code - 32), next_set)
-        else if (char_code >= ichar('A') .and. char_code <= ichar('Z')) then
-          call compute_char_transitions_simple(opt%nfa, opt%dfa%states(dfa_idx)%nfa_states, &
-                                               char(char_code + 32), next_set)
-        end if
 
         ! Compute epsilon closure of result
         if (.not. next_set%is_empty()) then
@@ -1033,8 +1025,8 @@ contains
     if (opt%nfa%num_states == 0) return
 
     ! Fast path: use DFA if available (O(n) matching)
-    ! DFA now supports case-insensitive matching via case-folded transitions
-    if (opt%use_dfa) then
+    ! DFA is case-sensitive; case-insensitive matching falls through to NFA path
+    if (opt%use_dfa .and. .not. ignore_case) then
       res = dfa_search(opt%dfa, text, text_len)
       return
     end if
