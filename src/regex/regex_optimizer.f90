@@ -83,6 +83,7 @@ module regex_optimizer
     logical :: use_dfa = .false.                 ! Use DFA instead of NFA
     type(ac_automaton_t) :: ac                   ! Aho-Corasick automaton (for alternation)
     logical :: use_aho_corasick = .false.        ! Use Aho-Corasick for matching
+    logical :: has_backrefs = .false.            ! Pattern contains backreferences
     logical :: optimized = .false.
   end type optimized_nfa_t
 
@@ -193,6 +194,10 @@ contains
     opt%anchored_start = .false.
     opt%anchored_end = .false.
     opt%use_dfa = .false.
+    opt%has_backrefs = .false.
+
+    ! Detect backreferences in NFA
+    opt%has_backrefs = has_backref_transitions(nfa)
 
     ! Extract literal prefix and detect anchors
     call extract_prefix_and_anchors(opt)
@@ -213,7 +218,8 @@ contains
 
     ! Try to compile full DFA for O(n) matching
     ! Only for patterns without any position-dependent transitions (anchors)
-    if (.not. has_anchor_transitions(opt%nfa)) then
+    ! and without backreferences (which require backtracking)
+    if (.not. has_anchor_transitions(opt%nfa) .and. .not. opt%has_backrefs) then
       call compile_dfa(opt)
       ! DEBUG: Print DFA compilation result (uncomment for debugging)
       ! write(0,*) 'DFA compiled:', opt%use_dfa, 'states:', opt%dfa%num_states, 'too_large:', opt%dfa%too_large
@@ -387,6 +393,28 @@ contains
       end do
     end do
   end function has_anchor_transitions
+
+  function has_backref_transitions(nfa) result(has_backrefs)
+    !> Check if NFA has any backreference transitions
+    !> Backrefs are encoded as TRANS_EPSILON with negative anchor_type
+    type(nfa_t), intent(in) :: nfa
+    logical :: has_backrefs
+
+    integer :: state, i
+    type(nfa_transition_t) :: trans
+
+    has_backrefs = .false.
+
+    do state = 1, nfa%num_states
+      do i = 1, nfa%states(state)%num_trans
+        trans = nfa%states(state)%trans(i)
+        if (trans%trans_type == TRANS_EPSILON .and. trans%anchor_type < 0) then
+          has_backrefs = .true.
+          return
+        end if
+      end do
+    end do
+  end function has_backref_transitions
 
   !---------------------------------------------------------------------------
   ! Character Equivalence Classes
@@ -1025,6 +1053,12 @@ contains
 
     if (opt%nfa%num_states == 0) return
 
+    ! Backtracking path: use backtracking matcher for patterns with backreferences
+    if (opt%has_backrefs) then
+      res = backtrack_search(opt%nfa, text, text_len, ignore_case)
+      return
+    end if
+
     ! Fast path: use DFA if available (O(n) matching)
     ! DFA is case-sensitive; case-insensitive matching falls through to NFA path
     if (opt%use_dfa .and. .not. ignore_case) then
@@ -1510,6 +1544,21 @@ contains
     integer :: ic
     ic = ichar(c)
     if (ic >= ichar('A') .and. ic <= ichar('Z')) then
+      ! ASCII uppercase A-Z -> a-z
+      lower = char(ic + 32)
+    else if (ic >= 192 .and. ic <= 214) then
+      ! Latin-1 uppercase À-Ö (192-214) -> à-ö (224-246)
+      lower = char(ic + 32)
+    else if (ic >= 216 .and. ic <= 222) then
+      ! Latin-1 uppercase Ø-Þ (216-222) -> ø-þ (248-254)
+      lower = char(ic + 32)
+    else if (ic >= 128 .and. ic <= 150) then
+      ! UTF-8 continuation byte for uppercase Latin Extended-A (U+00C0-U+00D6)
+      ! When preceded by 0xC3, these represent À-Ö, fold to à-ö
+      lower = char(ic + 32)
+    else if (ic >= 152 .and. ic <= 158) then
+      ! UTF-8 continuation byte for uppercase Latin Extended-A (U+00D8-U+00DE)
+      ! When preceded by 0xC3, these represent Ø-Þ, fold to ø-þ
       lower = char(ic + 32)
     else
       lower = c
@@ -1747,5 +1796,284 @@ contains
     end if
 
   end function ac_optimized_search
+
+  !---------------------------------------------------------------------------
+  ! Backtracking Matcher for Backreferences
+  !---------------------------------------------------------------------------
+
+  function backtrack_search(nfa, text, text_len, ignore_case) result(res)
+    !> Search for pattern with backreferences using backtracking
+    !> Tries each starting position until a match is found
+    type(nfa_t), intent(in) :: nfa
+    character(len=*), intent(in) :: text
+    integer, intent(in) :: text_len
+    logical, intent(in) :: ignore_case
+    type(match_result_t) :: res
+
+    integer :: start_pos
+    type(match_result_t) :: try_res
+
+    res%matched = .false.
+
+    do start_pos = 1, text_len + 1
+      try_res = backtrack_match(nfa, text, text_len, start_pos, ignore_case)
+      if (try_res%matched) then
+        res = try_res
+        return
+      end if
+    end do
+
+  end function backtrack_search
+
+  function backtrack_match(nfa, text, text_len, start_pos, ignore_case) result(res)
+    !> Try to match NFA with backreferences starting at start_pos
+    !> Uses recursive backtracking to track group captures
+    type(nfa_t), intent(in) :: nfa
+    character(len=*), intent(in) :: text
+    integer, intent(in) :: text_len, start_pos
+    logical, intent(in) :: ignore_case
+    type(match_result_t) :: res
+
+    integer :: group_starts(9), group_ends(9)
+    integer :: best_end
+
+    res%matched = .false.
+    group_starts = 0
+    group_ends = 0
+    best_end = start_pos - 1
+
+    ! Try to match from the start state
+    if (backtrack_from_state(nfa, nfa%start_state, text, text_len, start_pos, &
+                             ignore_case, group_starts, group_ends, best_end)) then
+      res%matched = .true.
+      res%match_start = start_pos
+      res%match_end = best_end
+      res%group_starts = group_starts
+      res%group_ends = group_ends
+    end if
+
+  end function backtrack_match
+
+  recursive function backtrack_from_state(nfa, state, text, text_len, pos, &
+                                          ignore_case, group_starts, group_ends, best_end) result(matched)
+    !> Recursive backtracking from a given NFA state
+    !> Returns true if we can reach an accepting state
+    type(nfa_t), intent(in) :: nfa
+    integer, intent(in) :: state
+    character(len=*), intent(in) :: text
+    integer, intent(in) :: text_len, pos
+    logical, intent(in) :: ignore_case
+    integer, intent(inout) :: group_starts(9), group_ends(9)
+    integer, intent(inout) :: best_end
+    logical :: matched
+
+    integer :: i, target, old_start, old_end
+    integer :: backref_num, ref_start, ref_end, ref_len
+    integer :: saved_starts(9), saved_ends(9)
+    type(nfa_transition_t) :: trans
+    character(len=1) :: c, c_lower, match_lower
+    logical :: char_matches
+
+    matched = .false.
+
+    if (state < 1 .or. state > nfa%num_states) return
+
+    ! Record group start if this state starts a group
+    if (nfa%states(state)%group_start > 0 .and. nfa%states(state)%group_start <= 9) then
+      old_start = group_starts(nfa%states(state)%group_start)
+      group_starts(nfa%states(state)%group_start) = pos
+    else
+      old_start = 0
+    end if
+
+    ! Record group end if this state ends a group
+    ! This must be done BEFORE processing transitions so backrefs can see the captured text
+    if (nfa%states(state)%group_end > 0 .and. nfa%states(state)%group_end <= 9) then
+      old_end = group_ends(nfa%states(state)%group_end)
+      group_ends(nfa%states(state)%group_end) = pos - 1
+    else
+      old_end = 0
+    end if
+
+    ! Check if this is an accepting state
+    if (nfa%states(state)%is_accept) then
+      matched = .true.
+      if (pos - 1 > best_end) best_end = pos - 1
+      ! Continue to find longest match (greedy)
+    end if
+
+    ! Try each transition from this state
+    do i = 1, nfa%states(state)%num_trans
+      trans = nfa%states(state)%trans(i)
+      target = trans%target
+
+      select case (trans%trans_type)
+        case (TRANS_EPSILON)
+          ! Check for backreference (negative anchor_type)
+          if (trans%anchor_type < 0) then
+            backref_num = -trans%anchor_type
+            if (backref_num >= 1 .and. backref_num <= 9) then
+              ref_start = group_starts(backref_num)
+              ref_end = group_ends(backref_num)
+
+              ! If group hasn't been captured yet, backreference fails
+              if (ref_start == 0 .or. ref_end == 0 .or. ref_end < ref_start) cycle
+
+              ref_len = ref_end - ref_start + 1
+
+              ! Check if we have enough text remaining
+              if (pos + ref_len - 1 > text_len) cycle
+
+              ! Check if the text matches the captured group
+              if (ignore_case) then
+                if (.not. strings_equal_icase(text(pos:pos+ref_len-1), &
+                                              text(ref_start:ref_end))) cycle
+              else
+                if (text(pos:pos+ref_len-1) /= text(ref_start:ref_end)) cycle
+              end if
+
+              ! Backref matches - continue from target with advanced position
+              saved_starts = group_starts
+              saved_ends = group_ends
+              if (backtrack_from_state(nfa, target, text, text_len, pos + ref_len, &
+                                       ignore_case, group_starts, group_ends, best_end)) then
+                matched = .true.
+              else
+                group_starts = saved_starts
+                group_ends = saved_ends
+              end if
+            end if
+          else
+            ! Regular epsilon transition
+            saved_starts = group_starts
+            saved_ends = group_ends
+            if (backtrack_from_state(nfa, target, text, text_len, pos, &
+                                     ignore_case, group_starts, group_ends, best_end)) then
+              matched = .true.
+            else
+              group_starts = saved_starts
+              group_ends = saved_ends
+            end if
+          end if
+
+        case (TRANS_ANCHOR)
+          ! Check if anchor matches at this position
+          if (anchor_matches_opt(trans%anchor_type, text, pos, text_len)) then
+            saved_starts = group_starts
+            saved_ends = group_ends
+            if (backtrack_from_state(nfa, target, text, text_len, pos, &
+                                     ignore_case, group_starts, group_ends, best_end)) then
+              matched = .true.
+            else
+              group_starts = saved_starts
+              group_ends = saved_ends
+            end if
+          end if
+
+        case (TRANS_CHAR)
+          ! Character transition - need text available
+          if (pos <= text_len) then
+            c = text(pos:pos)
+            char_matches = .false.
+
+            if (ignore_case) then
+              c_lower = to_lower_char(c)
+              match_lower = to_lower_char(trans%match_char)
+              char_matches = (c_lower == match_lower)
+            else
+              char_matches = (c == trans%match_char)
+            end if
+
+            if (char_matches) then
+              saved_starts = group_starts
+              saved_ends = group_ends
+              if (backtrack_from_state(nfa, target, text, text_len, pos + 1, &
+                                       ignore_case, group_starts, group_ends, best_end)) then
+                matched = .true.
+              else
+                group_starts = saved_starts
+                group_ends = saved_ends
+              end if
+            end if
+          end if
+
+        case (TRANS_CLASS)
+          ! Character class transition
+          if (pos <= text_len) then
+            c = text(pos:pos)
+            if (ignore_case) then
+              if (charclass_test_case_insensitive(trans%char_bits, c)) then
+                saved_starts = group_starts
+                saved_ends = group_ends
+                if (backtrack_from_state(nfa, target, text, text_len, pos + 1, &
+                                         ignore_case, group_starts, group_ends, best_end)) then
+                  matched = .true.
+                else
+                  group_starts = saved_starts
+                  group_ends = saved_ends
+                end if
+              end if
+            else
+              if (charclass_test(trans%char_bits, c)) then
+                saved_starts = group_starts
+                saved_ends = group_ends
+                if (backtrack_from_state(nfa, target, text, text_len, pos + 1, &
+                                         ignore_case, group_starts, group_ends, best_end)) then
+                  matched = .true.
+                else
+                  group_starts = saved_starts
+                  group_ends = saved_ends
+                end if
+              end if
+            end if
+          end if
+
+        case (TRANS_ANY)
+          ! Dot matches any character except newline
+          if (pos <= text_len) then
+            if (text(pos:pos) /= char(10)) then
+              saved_starts = group_starts
+              saved_ends = group_ends
+              if (backtrack_from_state(nfa, target, text, text_len, pos + 1, &
+                                       ignore_case, group_starts, group_ends, best_end)) then
+                matched = .true.
+              else
+                group_starts = saved_starts
+                group_ends = saved_ends
+              end if
+            end if
+          end if
+
+      end select
+    end do
+
+    ! Restore group start and end if we didn't match
+    if (.not. matched) then
+      if (nfa%states(state)%group_start > 0 .and. nfa%states(state)%group_start <= 9) then
+        group_starts(nfa%states(state)%group_start) = old_start
+      end if
+      if (nfa%states(state)%group_end > 0 .and. nfa%states(state)%group_end <= 9) then
+        group_ends(nfa%states(state)%group_end) = old_end
+      end if
+    end if
+
+  end function backtrack_from_state
+
+  function strings_equal_icase(s1, s2) result(equal)
+    !> Compare two strings case-insensitively
+    character(len=*), intent(in) :: s1, s2
+    logical :: equal
+    integer :: i, n
+
+    equal = .false.
+    n = len(s1)
+    if (len(s2) /= n) return
+
+    do i = 1, n
+      if (to_lower_char(s1(i:i)) /= to_lower_char(s2(i:i))) return
+    end do
+
+    equal = .true.
+  end function strings_equal_icase
 
 end module regex_optimizer

@@ -311,6 +311,21 @@ contains
 
     ic = ichar(c)
     if (ic >= ichar('A') .and. ic <= ichar('Z')) then
+      ! ASCII uppercase A-Z -> a-z
+      lower = char(ic + 32)
+    else if (ic >= 192 .and. ic <= 214) then
+      ! Latin-1 uppercase À-Ö (192-214) -> à-ö (224-246)
+      lower = char(ic + 32)
+    else if (ic >= 216 .and. ic <= 222) then
+      ! Latin-1 uppercase Ø-Þ (216-222) -> ø-þ (248-254)
+      lower = char(ic + 32)
+    else if (ic >= 128 .and. ic <= 150) then
+      ! UTF-8 continuation byte for uppercase Latin Extended-A (U+00C0-U+00D6)
+      ! When preceded by 0xC3, these represent À-Ö, fold to à-ö
+      lower = char(ic + 32)
+    else if (ic >= 152 .and. ic <= 158) then
+      ! UTF-8 continuation byte for uppercase Latin Extended-A (U+00D8-U+00DE)
+      ! When preceded by 0xC3, these represent Ø-Þ, fold to ø-þ
       lower = char(ic + 32)
     else
       lower = c
