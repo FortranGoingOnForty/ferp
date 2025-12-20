@@ -10,6 +10,7 @@ module regex_optimizer
   use regex_types
   use regex_charclass
   use aho_corasick
+  use ferp_kinds, only: pattern_len
   implicit none
   private
 
@@ -1595,7 +1596,7 @@ contains
 
     is_simple = .true.
     num_alt = 0
-    pat_len = len_trim(pattern)
+    pat_len = pattern_len(pattern)  ! Use pattern_len to preserve whitespace patterns
 
     if (pat_len == 0) then
       is_simple = .false.
@@ -1622,10 +1623,14 @@ contains
               return
             end if
             alternatives(num_alt) = pattern(alt_start:alt_start+alt_len-1)
+            ! Add null terminator to preserve exact length
+            if (alt_len < len(alternatives(num_alt))) then
+              alternatives(num_alt)(alt_len+1:alt_len+1) = char(0)
+            end if
           else
             ! Empty alternative - still valid
             num_alt = num_alt + 1
-            alternatives(num_alt) = ''
+            alternatives(num_alt) = char(0)
           end if
           alt_start = i + 1
           alt_len = 0
@@ -1665,9 +1670,13 @@ contains
               return
             end if
             alternatives(num_alt) = pattern(alt_start:alt_start+alt_len-1)
+            ! Add null terminator to preserve exact length
+            if (alt_len < len(alternatives(num_alt))) then
+              alternatives(num_alt)(alt_len+1:alt_len+1) = char(0)
+            end if
           else
             num_alt = num_alt + 1
-            alternatives(num_alt) = ''
+            alternatives(num_alt) = char(0)
           end if
           alt_start = i + 1
           alt_len = 0
@@ -1704,8 +1713,12 @@ contains
       end if
       if (alt_len > 0) then
         alternatives(num_alt) = pattern(alt_start:alt_start+alt_len-1)
+        ! Add null terminator to preserve exact length
+        if (alt_len < len(alternatives(num_alt))) then
+          alternatives(num_alt)(alt_len+1:alt_len+1) = char(0)
+        end if
       else
-        alternatives(num_alt) = ''
+        alternatives(num_alt) = char(0)
       end if
     end if
 
