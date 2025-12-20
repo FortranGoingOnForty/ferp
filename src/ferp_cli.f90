@@ -62,7 +62,8 @@ contains
       ! After --, everything is a file/pattern argument
       if (end_of_options) then
         if (.not. has_explicit_pattern .and. size(patterns) == 0) then
-          call append_pattern(patterns, trim(arg))
+          ! Use exact length from get_command_argument to preserve whitespace patterns
+          call append_pattern(patterns, arg(1:arg_len))
           has_explicit_pattern = .true.
         else
           call append_file(files, trim(arg))
@@ -96,7 +97,8 @@ contains
       else
         ! Non-option argument
         if (.not. has_explicit_pattern .and. size(patterns) == 0) then
-          call append_pattern(patterns, trim(arg))
+          ! Use exact length from get_command_argument to preserve whitespace patterns
+          call append_pattern(patterns, arg(1:arg_len))
           has_explicit_pattern = .true.
         else
           call append_file(files, trim(arg))
@@ -687,41 +689,87 @@ contains
   end subroutine handle_option_argument
 
   subroutine read_patterns_from_file(patterns, filename, ierr)
+    !> Read patterns from file, preserving exact line lengths (including whitespace-only lines)
     character(len=max_pattern_len), allocatable, intent(inout) :: patterns(:)
     character(len=*), intent(in) :: filename
     integer, intent(out) :: ierr
 
-    integer :: unit_num, ios
+    integer :: unit_num, ios, line_len
     character(len=max_pattern_len) :: line
+    character(len=1) :: ch
 
     ierr = 0
-    open(newunit=unit_num, file=filename, status='old', action='read', iostat=ios)
+    ! Use stream access to read exact line lengths (preserving whitespace patterns)
+    open(newunit=unit_num, file=filename, status='old', action='read', &
+         access='stream', form='formatted', iostat=ios)
     if (ios /= 0) then
       write(error_unit, '(A)') 'ferp: ' // trim(filename) // ': No such file or directory'
       ierr = 2
       return
     end if
 
+    line_len = 0
+    line = ''
+
     do
-      read(unit_num, '(A)', iostat=ios) line
-      if (ios /= 0) exit
-      call append_pattern(patterns, trim(line))
+      read(unit_num, '(A1)', iostat=ios, advance='no') ch
+      if (ios /= 0) then
+        ! EOF or error - save current line if non-empty
+        if (line_len > 0) then
+          call append_pattern(patterns, line(1:line_len))
+        end if
+        exit
+      end if
+
+      if (ch == char(10)) then
+        ! Newline - save pattern with exact length (even if zero for empty lines)
+        if (line_len > 0) then
+          call append_pattern(patterns, line(1:line_len))
+        else
+          ! Empty line - skip (grep ignores empty pattern lines)
+        end if
+        line_len = 0
+        line = ''
+      else if (ch == char(13)) then
+        ! Carriage return - ignore (handle Windows line endings)
+      else
+        ! Regular character - add to line
+        if (line_len < max_pattern_len) then
+          line_len = line_len + 1
+          line(line_len:line_len) = ch
+        end if
+      end if
     end do
 
     close(unit_num)
   end subroutine read_patterns_from_file
 
   subroutine append_pattern(patterns, pattern)
+    !> Append a pattern to the patterns array, preserving its exact length
+    !> Uses null terminator to mark the true end of the pattern
     character(len=max_pattern_len), allocatable, intent(inout) :: patterns(:)
     character(len=*), intent(in) :: pattern
 
     character(len=max_pattern_len), allocatable :: temp(:)
-    integer :: n
+    integer :: n, plen
 
     n = size(patterns)
     allocate(temp(n + 1))
     if (n > 0) temp(1:n) = patterns
-    temp(n + 1) = pattern
+
+    ! Store pattern with null terminator to preserve exact length
+    plen = len(pattern)
+    if (plen > 0 .and. plen < max_pattern_len) then
+      temp(n + 1) = pattern
+      temp(n + 1)(plen + 1:plen + 1) = char(0)  ! Null terminator
+    else if (plen == 0) then
+      ! Empty pattern - store just null terminator
+      temp(n + 1) = char(0)
+    else
+      ! Pattern too long - truncate
+      temp(n + 1) = pattern(1:max_pattern_len)
+    end if
+
     call move_alloc(temp, patterns)
   end subroutine append_pattern
 
