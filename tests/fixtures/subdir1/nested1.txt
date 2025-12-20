@@ -1,0 +1,3 @@
+nested file 1
+match in subdir1
+another line

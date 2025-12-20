@@ -1,0 +1,3 @@
+nested file 2
+this has a match too
+final line

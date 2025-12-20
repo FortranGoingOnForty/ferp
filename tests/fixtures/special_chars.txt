@@ -1,0 +1,10 @@
+a+b equals c
+price is $100
+regex: foo.*bar
+path/to/file.txt
+brackets [test] here
+question? yes!
+pipe|character
+caret^start
+dollar$end
+parentheses (test) here

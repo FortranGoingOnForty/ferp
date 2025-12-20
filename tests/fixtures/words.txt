@@ -1,0 +1,5 @@
+test testing tested tester
+the cat sat on the mat
+hello helloworld worldhello
+word word-hyphen word_underscore
+foobar foo bar foo-bar

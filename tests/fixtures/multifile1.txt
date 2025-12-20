@@ -1,0 +1,3 @@
+file1 line1 match
+file1 line2
+file1 line3 match

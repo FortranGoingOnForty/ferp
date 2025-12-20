@@ -1,0 +1,13 @@
+before 1
+before 2
+before 3
+MATCH LINE
+after 1
+after 2
+after 3
+gap line 1
+gap line 2
+gap line 3
+ANOTHER MATCH
+trailing 1
+trailing 2
