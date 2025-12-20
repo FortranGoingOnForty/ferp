@@ -930,7 +930,8 @@ test_line_prefix() {
     should_run "$name" && {
         log_test "$name"
         local out
-        out=$("$FERP" -n "line 1" "$FIXTURES/numbers.txt")
+        # Use -x for exact line match to avoid "line 10" also matching
+        out=$("$FERP" -nx "line 1" "$FIXTURES/numbers.txt")
         if [[ "$out" == "1:line 1" ]]; then
             pass "$name"
         else
@@ -955,7 +956,8 @@ test_line_prefix() {
     should_run "$name" && {
         log_test "$name"
         local out
-        out=$("$FERP" -b "line 1" "$FIXTURES/numbers.txt")
+        # Use -x for exact line match to avoid "line 10" also matching
+        out=$("$FERP" -bx "line 1" "$FIXTURES/numbers.txt")
         if [[ "$out" == "0:line 1" ]]; then
             pass "$name"
         else
@@ -992,7 +994,8 @@ test_line_prefix() {
     should_run "$name" && {
         log_test "$name"
         local out
-        out=$("$FERP" --byte-offset "line 1" "$FIXTURES/numbers.txt")
+        # Use -x for exact line match
+        out=$("$FERP" --byte-offset -x "line 1" "$FIXTURES/numbers.txt")
         if [[ "$out" == "0:line 1" ]]; then
             pass "$name"
         else
@@ -1055,7 +1058,8 @@ test_line_prefix() {
     should_run "$name" && {
         log_test "$name"
         local out
-        out=$("$FERP" -HZ "hello" "$FIXTURES/simple.txt" | head -1 | od -c | head -1)
+        # Check that null byte exists between filename and content
+        out=$("$FERP" -HZ "hello" "$FIXTURES/simple.txt" | head -1 | od -c)
         if echo "$out" | grep -q '\\0'; then
             pass "$name"
         else
@@ -1067,7 +1071,8 @@ test_line_prefix() {
     should_run "$name" && {
         log_test "$name"
         local out
-        out=$("$FERP" -H --null "hello" "$FIXTURES/simple.txt" | head -1 | od -c | head -1)
+        # Check that null byte exists between filename and content
+        out=$("$FERP" -H --null "hello" "$FIXTURES/simple.txt" | head -1 | od -c)
         if echo "$out" | grep -q '\\0'; then
             pass "$name"
         else
