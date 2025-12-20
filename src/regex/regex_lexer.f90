@@ -2,6 +2,7 @@ module regex_lexer
   !> Regex pattern tokenizer for FERP
   !> Handles both BRE (Basic) and ERE (Extended) regex dialects
   use regex_types
+  use ferp_kinds, only: pattern_len
   implicit none
   private
 
@@ -23,7 +24,7 @@ contains
 
     ierr = 0
     call tokens%init()
-    n = len_trim(pattern)
+    n = pattern_len(pattern)  ! Use pattern_len to preserve whitespace patterns
     i = 1
     in_bracket = .false.
 

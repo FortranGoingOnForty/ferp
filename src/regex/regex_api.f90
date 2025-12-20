@@ -7,6 +7,7 @@ module regex_api
   use regex_nfa
   use regex_engine
   use regex_optimizer
+  use ferp_kinds, only: pattern_len
   implicit none
   private
 
@@ -53,8 +54,8 @@ contains
     if (present(is_ere)) extended = is_ere
     re%is_ere = extended
 
-    ! Handle empty pattern
-    if (len_trim(pattern) == 0) then
+    ! Handle empty pattern (use pattern_len to preserve whitespace patterns)
+    if (pattern_len(pattern) == 0) then
       call re%nfa%init()
       re%nfa%start_state = re%nfa%add_state()
       re%nfa%accept_state = re%nfa%add_state()

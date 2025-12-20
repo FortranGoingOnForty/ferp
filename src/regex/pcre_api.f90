@@ -2,6 +2,7 @@ module pcre_api
   !> PCRE2 library bindings for Perl-compatible regular expressions
   !> Uses iso_c_binding for C interoperability with libpcre2-8
   use, intrinsic :: iso_c_binding
+  use ferp_kinds, only: pattern_len
   implicit none
   private
 
@@ -159,14 +160,18 @@ contains
     logical, intent(in), optional :: ignore_case
     integer, intent(out) :: ierr
 
-    character(len=len_trim(pattern)+1, kind=c_char) :: c_pattern
+    integer :: plen
+    character(len=:), allocatable :: c_pattern
     integer(c_int) :: options, errorcode
-    integer(c_size_t) :: erroroffset, pattern_len
+    integer(c_size_t) :: erroroffset, pcre_pattern_len
 
     ierr = 0
     re%compiled = .false.
     re%error_code = 0
     re%error_msg = ''
+
+    ! Get actual pattern length (preserving whitespace patterns)
+    plen = pattern_len(pattern)
 
     ! Set options - enable UTF-8 and Unicode properties by default
     options = ior(PCRE2_UTF, PCRE2_UCP)
@@ -174,12 +179,13 @@ contains
       if (ignore_case) options = ior(options, PCRE2_CASELESS)
     end if
 
-    ! Prepare pattern as C string
-    c_pattern = trim(pattern) // c_null_char
-    pattern_len = int(len_trim(pattern), c_size_t)
+    ! Prepare pattern as C string (use exact length, not trim)
+    allocate(character(len=plen+1) :: c_pattern)
+    c_pattern = pattern(1:plen) // c_null_char
+    pcre_pattern_len = int(plen, c_size_t)
 
     ! Compile pattern
-    re%code = pcre2_compile_8(c_pattern, pattern_len, options, &
+    re%code = pcre2_compile_8(c_pattern, pcre_pattern_len, options, &
                                errorcode, erroroffset, c_null_ptr)
 
     if (.not. c_associated(re%code)) then

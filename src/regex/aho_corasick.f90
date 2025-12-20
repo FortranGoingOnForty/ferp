@@ -2,6 +2,7 @@ module aho_corasick
   !> Aho-Corasick automaton for multi-pattern string matching
   !> Matches all patterns in a single pass O(n + m + z)
   !> where n=text length, m=total pattern length, z=matches
+  use ferp_kinds, only: pattern_len
   implicit none
   private
 
@@ -63,16 +64,16 @@ contains
     ac%ignore_case = ignore_case
     ac%num_patterns = num_patterns
 
-    ! Allocate pattern lengths
+    ! Allocate pattern lengths (use pattern_len to preserve whitespace patterns)
     allocate(ac%pattern_lengths(num_patterns))
     do i = 1, num_patterns
-      ac%pattern_lengths(i) = len_trim(patterns(i))
+      ac%pattern_lengths(i) = pattern_len(patterns(i))
     end do
 
     ! Initial capacity - estimate based on total pattern length
     ac%capacity = 1
     do i = 1, num_patterns
-      ac%capacity = ac%capacity + len_trim(patterns(i))
+      ac%capacity = ac%capacity + pattern_len(patterns(i))
     end do
     ac%capacity = max(ac%capacity, 256)
     allocate(ac%nodes(ac%capacity))
@@ -84,7 +85,7 @@ contains
     ! Phase 1: Build trie from patterns
     do i = 1, num_patterns
       state = 1  ! Start at root
-      do j = 1, len_trim(patterns(i))
+      do j = 1, pattern_len(patterns(i))
         ch = patterns(i)(j:j)
         if (ignore_case) then
           c = to_lower_code(ichar(ch))

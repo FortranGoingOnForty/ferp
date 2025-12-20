@@ -102,17 +102,17 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.f90 | $(BUILD_DIR)
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# Regex module dependencies
+# Regex module dependencies (note: some depend on ferp_kinds for pattern_len function)
 $(BUILD_DIR)/regex_charclass.o:
 $(BUILD_DIR)/regex_types.o: $(BUILD_DIR)/regex_charclass.o
-$(BUILD_DIR)/regex_lexer.o: $(BUILD_DIR)/regex_types.o
+$(BUILD_DIR)/regex_lexer.o: $(BUILD_DIR)/regex_types.o $(BUILD_DIR)/ferp_kinds.o
 $(BUILD_DIR)/regex_parser.o: $(BUILD_DIR)/regex_types.o
 $(BUILD_DIR)/regex_nfa.o: $(BUILD_DIR)/regex_types.o $(BUILD_DIR)/regex_charclass.o $(BUILD_DIR)/regex_parser.o
 $(BUILD_DIR)/regex_engine.o: $(BUILD_DIR)/regex_types.o
-$(BUILD_DIR)/aho_corasick.o:
-$(BUILD_DIR)/regex_optimizer.o: $(BUILD_DIR)/regex_types.o $(BUILD_DIR)/regex_charclass.o $(BUILD_DIR)/aho_corasick.o
-$(BUILD_DIR)/regex_api.o: $(BUILD_DIR)/regex_types.o $(BUILD_DIR)/regex_lexer.o $(BUILD_DIR)/regex_parser.o $(BUILD_DIR)/regex_nfa.o $(BUILD_DIR)/regex_engine.o $(BUILD_DIR)/regex_optimizer.o
-$(BUILD_DIR)/pcre_api.o:
+$(BUILD_DIR)/aho_corasick.o: $(BUILD_DIR)/ferp_kinds.o
+$(BUILD_DIR)/regex_optimizer.o: $(BUILD_DIR)/regex_types.o $(BUILD_DIR)/regex_charclass.o $(BUILD_DIR)/aho_corasick.o $(BUILD_DIR)/ferp_kinds.o
+$(BUILD_DIR)/regex_api.o: $(BUILD_DIR)/regex_types.o $(BUILD_DIR)/regex_lexer.o $(BUILD_DIR)/regex_parser.o $(BUILD_DIR)/regex_nfa.o $(BUILD_DIR)/regex_engine.o $(BUILD_DIR)/regex_optimizer.o $(BUILD_DIR)/ferp_kinds.o
+$(BUILD_DIR)/pcre_api.o: $(BUILD_DIR)/ferp_kinds.o
 
 # Main module dependencies
 $(BUILD_DIR)/ferp_options.o: $(BUILD_DIR)/ferp_kinds.o
