@@ -48,6 +48,7 @@ contains
     integer, intent(in) :: line_num
     integer(i64), intent(in) :: byte_off
     type(grep_options), intent(in) :: opts
+    character(len=16) :: num_fmt
 
     ! Quiet mode - no output
     if (opts%quiet) return
@@ -62,9 +63,14 @@ contains
       end if
     end if
 
-    ! Print line number prefix
+    ! Print line number prefix (use width for -T alignment)
     if (opts%show_line_number) then
-      write(output_unit, '(I0,A)', advance='no') line_num, ':'
+      if (opts%initial_tab .and. opts%line_number_width > 1) then
+        write(num_fmt, '(A,I0,A)') '(I', opts%line_number_width, ',A)'
+        write(output_unit, num_fmt, advance='no') line_num, ':'
+      else
+        write(output_unit, '(I0,A)', advance='no') line_num, ':'
+      end if
     end if
 
     ! Print byte offset prefix
@@ -72,8 +78,10 @@ contains
       write(output_unit, '(I0,A)', advance='no') byte_off, ':'
     end if
 
-    ! Print tab alignment if requested
-    if (opts%initial_tab) then
+    ! Print tab alignment if requested (only when there's a prefix)
+    if (opts%initial_tab .and. &
+        ((opts%show_filename .and. .not. opts%hide_filename) .or. &
+         opts%show_line_number .or. opts%show_byte_offset)) then
       write(output_unit, '(A)', advance='no') char(9)  ! TAB
     end if
 
@@ -98,6 +106,7 @@ contains
     integer, intent(in) :: line_num
     integer(i64), intent(in) :: byte_off
     type(grep_options), intent(in) :: opts
+    character(len=16) :: num_fmt
 
     if (opts%quiet) return
 
@@ -111,9 +120,14 @@ contains
       end if
     end if
 
-    ! Print line number prefix with - separator
+    ! Print line number prefix with - separator (use width for -T alignment)
     if (opts%show_line_number) then
-      write(output_unit, '(I0,A)', advance='no') line_num, '-'
+      if (opts%initial_tab .and. opts%line_number_width > 1) then
+        write(num_fmt, '(A,I0,A)') '(I', opts%line_number_width, ',A)'
+        write(output_unit, num_fmt, advance='no') line_num, '-'
+      else
+        write(output_unit, '(I0,A)', advance='no') line_num, '-'
+      end if
     end if
 
     ! Print byte offset prefix with - separator
@@ -121,8 +135,10 @@ contains
       write(output_unit, '(I0,A)', advance='no') byte_off, '-'
     end if
 
-    ! Print tab alignment if requested
-    if (opts%initial_tab) then
+    ! Print tab alignment if requested (only when there's a prefix)
+    if (opts%initial_tab .and. &
+        ((opts%show_filename .and. .not. opts%hide_filename) .or. &
+         opts%show_line_number .or. opts%show_byte_offset)) then
       write(output_unit, '(A)', advance='no') char(9)
     end if
 
@@ -229,6 +245,7 @@ contains
     integer, intent(in) :: line_num
     integer(i64), intent(in) :: byte_off
     type(grep_options), intent(in) :: opts
+    character(len=16) :: num_fmt
 
     if (opts%quiet) return
 
@@ -242,9 +259,14 @@ contains
       end if
     end if
 
-    ! Print line number prefix
+    ! Print line number prefix (use width for -T alignment)
     if (opts%show_line_number) then
-      write(output_unit, '(I0,A)', advance='no') line_num, ':'
+      if (opts%initial_tab .and. opts%line_number_width > 1) then
+        write(num_fmt, '(A,I0,A)') '(I', opts%line_number_width, ',A)'
+        write(output_unit, num_fmt, advance='no') line_num, ':'
+      else
+        write(output_unit, '(I0,A)', advance='no') line_num, ':'
+      end if
     end if
 
     ! Print byte offset prefix (offset to start of match)
@@ -252,8 +274,10 @@ contains
       write(output_unit, '(I0,A)', advance='no') byte_off + match_start - 1, ':'
     end if
 
-    ! Print tab alignment if requested
-    if (opts%initial_tab) then
+    ! Print tab alignment if requested (only when there's a prefix)
+    if (opts%initial_tab .and. &
+        ((opts%show_filename .and. .not. opts%hide_filename) .or. &
+         opts%show_line_number .or. opts%show_byte_offset)) then
       write(output_unit, '(A)', advance='no') char(9)
     end if
 
@@ -286,6 +310,7 @@ contains
 
     integer :: i, pos, line_len
     logical :: use_color
+    character(len=16) :: num_fmt
 
     if (opts%quiet) return
 
@@ -320,13 +345,26 @@ contains
       end if
     end if
 
-    ! Print line number prefix
+    ! Print line number prefix (use width for -T alignment)
     if (opts%show_line_number) then
-      if (use_color) then
-        write(output_unit, '(A,I0,A)', advance='no') COLOR_LINENUM, line_num, COLOR_RESET
-        write(output_unit, '(A,A,A)', advance='no') COLOR_SEP, ':', COLOR_RESET
+      if (opts%initial_tab .and. opts%line_number_width > 1) then
+        write(num_fmt, '(A,I0,A)') '(I', opts%line_number_width, ')'
+        if (use_color) then
+          write(output_unit, '(A)', advance='no') COLOR_LINENUM
+          write(output_unit, num_fmt, advance='no') line_num
+          write(output_unit, '(A)', advance='no') COLOR_RESET
+          write(output_unit, '(A,A,A)', advance='no') COLOR_SEP, ':', COLOR_RESET
+        else
+          write(output_unit, num_fmt, advance='no') line_num
+          write(output_unit, '(A)', advance='no') ':'
+        end if
       else
-        write(output_unit, '(I0,A)', advance='no') line_num, ':'
+        if (use_color) then
+          write(output_unit, '(A,I0,A)', advance='no') COLOR_LINENUM, line_num, COLOR_RESET
+          write(output_unit, '(A,A,A)', advance='no') COLOR_SEP, ':', COLOR_RESET
+        else
+          write(output_unit, '(I0,A)', advance='no') line_num, ':'
+        end if
       end if
     end if
 
@@ -340,8 +378,10 @@ contains
       end if
     end if
 
-    ! Print tab alignment if requested
-    if (opts%initial_tab) then
+    ! Print tab alignment if requested (only when there's a prefix)
+    if (opts%initial_tab .and. &
+        ((opts%show_filename .and. .not. opts%hide_filename) .or. &
+         opts%show_line_number .or. opts%show_byte_offset)) then
       write(output_unit, '(A)', advance='no') char(9)
     end if
 

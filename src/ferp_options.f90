@@ -94,6 +94,7 @@ module ferp_options
     !> Internal state
     logical :: multiple_files = .false.    ! Auto-set when >1 file
     logical :: reading_stdin = .false.     ! Auto-set when reading stdin
+    integer :: line_number_width = 1       ! Width for -T padding (set per file)
   end type grep_options
 
 end module ferp_options
