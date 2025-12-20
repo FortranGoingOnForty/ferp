@@ -115,8 +115,8 @@ contains
       return
     end if
 
-    ! Validate: need at least one pattern
-    if (size(patterns) == 0) then
+    ! Validate: need at least one pattern source (but empty pattern file is valid)
+    if (.not. has_explicit_pattern) then
       write(error_unit, '(A)') 'ferp: no pattern specified'
       write(error_unit, '(A)') "Try 'ferp --help' for more information."
       ierr = 2
@@ -699,9 +699,9 @@ contains
     character(len=1) :: ch
 
     ierr = 0
-    ! Use stream access to read exact line lengths (preserving whitespace patterns)
+    ! Use unformatted stream access for byte-by-byte reading
     open(newunit=unit_num, file=filename, status='old', action='read', &
-         access='stream', form='formatted', iostat=ios)
+         access='stream', form='unformatted', iostat=ios)
     if (ios /= 0) then
       write(error_unit, '(A)') 'ferp: ' // trim(filename) // ': No such file or directory'
       ierr = 2
@@ -712,7 +712,7 @@ contains
     line = ''
 
     do
-      read(unit_num, '(A1)', iostat=ios, advance='no') ch
+      read(unit_num, iostat=ios) ch
       if (ios /= 0) then
         ! EOF or error - save current line if non-empty
         if (line_len > 0) then
