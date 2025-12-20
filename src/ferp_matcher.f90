@@ -43,9 +43,10 @@ contains
     type(compiled_patterns_t), intent(out) :: compiled
     integer, intent(out) :: ierr
 
-    integer :: i, n, plen
+    integer :: i, j, n, plen, total_subpats, subpat_count
     logical :: is_ere
     character(len=max_pattern_len) :: pattern
+    character(len=max_pattern_len), allocatable :: subpatterns(:)
 
     ierr = 0
     n = size(patterns)
@@ -55,18 +56,36 @@ contains
 
     ! Use Boyer-Moore for fixed string patterns
     if (compiled%is_fixed) then
-      allocate(compiled%bm_pats(n))
-
+      ! For -F mode, patterns containing newlines should be split into multiple patterns
+      ! First count total subpatterns
+      total_subpats = 0
       do i = 1, n
-        plen = pattern_len(patterns(i))
+        total_subpats = total_subpats + count_subpatterns(patterns(i))
+      end do
+
+      allocate(compiled%bm_pats(total_subpats))
+      allocate(subpatterns(total_subpats))
+
+      ! Split patterns on newlines
+      j = 0
+      do i = 1, n
+        call split_pattern_on_newlines(patterns(i), subpatterns, j)
+      end do
+
+      compiled%count = j
+
+      ! Compile each subpattern
+      do i = 1, j
+        plen = pattern_len(subpatterns(i))
         ! For case-insensitive, convert pattern to lowercase
         if (opts%ignore_case) then
-          call bm_compile(compiled%bm_pats(i), patterns(i)(1:plen), .true.)
+          call bm_compile(compiled%bm_pats(i), subpatterns(i)(1:plen), .true.)
         else
-          call bm_compile(compiled%bm_pats(i), patterns(i)(1:plen), .false.)
+          call bm_compile(compiled%bm_pats(i), subpatterns(i)(1:plen), .false.)
         end if
       end do
 
+      deallocate(subpatterns)
       compiled%compiled = .true.
       return
     end if
@@ -174,7 +193,7 @@ contains
     type(compiled_patterns_t), intent(inout), optional :: compiled  ! inout for DFA cache
     logical :: matches
 
-    integer :: i
+    integer :: i, num_patterns
     character(len=:), allocatable :: search_line
     character(len=max_pattern_len) :: search_pattern
 
@@ -187,8 +206,16 @@ contains
       search_line = line
     end if
 
+    ! Determine number of patterns to try
+    ! For -F mode with compiled patterns, use compiled%count (may differ due to newline splitting)
+    if (present(compiled) .and. compiled%compiled .and. compiled%is_fixed) then
+      num_patterns = compiled%count
+    else
+      num_patterns = size(patterns)
+    end if
+
     ! Try each pattern
-    do i = 1, size(patterns)
+    do i = 1, num_patterns
       ! Match based on pattern type
       select case (opts%pattern_type)
         case (PATTERN_FIXED)
@@ -542,7 +569,14 @@ contains
 
     ! Handle count mode
     if (opts%count_only) then
-      call print_count(match_count, src%filename, opts)
+      ! When -l is also set, only print filename for files with matches
+      if (opts%files_with_matches) then
+        if (match_count > 0) then
+          call print_filename(src%filename, opts)
+        end if
+      else
+        call print_count(match_count, src%filename, opts)
+      end if
     end if
 
   end function process_source_batch
@@ -694,6 +728,32 @@ contains
     logical :: need_separator  ! Need to print -- before next output
     logical :: use_context
     integer :: k
+    integer(i64) :: file_size
+
+    ! Calculate line number width for -T alignment (based on file size)
+    if (opts%initial_tab) then
+      if (src%source_type == SOURCE_MMAP .and. src%mmap_file%size > 0) then
+        file_size = src%mmap_file%size
+        if (file_size < 10) then
+          opts%line_number_width = 1
+        else if (file_size < 100) then
+          opts%line_number_width = 2
+        else if (file_size < 1000) then
+          opts%line_number_width = 3
+        else if (file_size < 10000) then
+          opts%line_number_width = 4
+        else if (file_size < 100000) then
+          opts%line_number_width = 5
+        else if (file_size < 1000000) then
+          opts%line_number_width = 6
+        else
+          opts%line_number_width = 7
+        end if
+      else
+        ! Stdin or unknown: use large default for alignment
+        opts%line_number_width = 7
+      end if
+    end if
 
     ! Try optimized batch mode for simple cases
     if (present(compiled) .and. compiled%compiled .and. can_use_batch_mode(src, opts)) then
@@ -752,7 +812,8 @@ contains
           call print_filename(src%filename, opts)
           if (allocated(before_buffer)) deallocate(before_buffer)
           return
-        else if (opts%only_matching) then
+        else if (opts%only_matching .and. .not. opts%count_only) then
+          ! -o mode: print each match (but -c takes priority)
           if (present(compiled)) then
             call find_matches(line, patterns, opts, compiled, match_starts, match_ends, num_matches)
           else
@@ -856,7 +917,14 @@ contains
 
     ! Handle -c (count) mode
     if (opts%count_only) then
-      call print_count(match_count, src%filename, opts)
+      ! When -l is also set, only print filename for files with matches
+      if (opts%files_with_matches) then
+        if (match_count > 0) then
+          call print_filename(src%filename, opts)
+        end if
+      else
+        call print_count(match_count, src%filename, opts)
+      end if
     end if
 
     ! Handle -L (files without match) mode
@@ -868,5 +936,72 @@ contains
     if (allocated(before_buffer)) deallocate(before_buffer)
 
   end function process_source
+
+  function count_subpatterns(pattern) result(count)
+    !> Count the number of subpatterns when splitting on newlines
+    !> Returns at least 1 for any non-empty pattern
+    character(len=*), intent(in) :: pattern
+    integer :: count
+
+    integer :: i, plen
+
+    plen = pattern_len(pattern)
+    if (plen == 0) then
+      count = 0
+      return
+    end if
+
+    count = 1
+    do i = 1, plen
+      if (pattern(i:i) == char(10)) then
+        count = count + 1
+      end if
+    end do
+
+  end function count_subpatterns
+
+  subroutine split_pattern_on_newlines(pattern, subpatterns, next_idx)
+    !> Split a pattern on newline characters into multiple subpatterns
+    !> Appends subpatterns to the array starting at next_idx+1
+    character(len=*), intent(in) :: pattern
+    character(len=max_pattern_len), intent(inout) :: subpatterns(:)
+    integer, intent(inout) :: next_idx
+
+    integer :: i, plen, start_pos, subpat_len
+
+    plen = pattern_len(pattern)
+    if (plen == 0) return
+
+    start_pos = 1
+    do i = 1, plen
+      if (pattern(i:i) == char(10)) then
+        ! Found a newline - extract subpattern
+        subpat_len = i - start_pos
+        if (subpat_len > 0) then
+          next_idx = next_idx + 1
+          subpatterns(next_idx) = pattern(start_pos:i-1)
+          ! Add null terminator
+          subpatterns(next_idx)(subpat_len+1:subpat_len+1) = char(0)
+        else
+          ! Empty subpattern (consecutive newlines or newline at start)
+          next_idx = next_idx + 1
+          subpatterns(next_idx) = char(0)
+        end if
+        start_pos = i + 1
+      end if
+    end do
+
+    ! Handle last segment (after final newline or entire string if no newlines)
+    if (start_pos <= plen) then
+      subpat_len = plen - start_pos + 1
+      next_idx = next_idx + 1
+      subpatterns(next_idx) = pattern(start_pos:plen)
+      ! Add null terminator
+      if (subpat_len < max_pattern_len) then
+        subpatterns(next_idx)(subpat_len+1:subpat_len+1) = char(0)
+      end if
+    end if
+
+  end subroutine split_pattern_on_newlines
 
 end module ferp_matcher
