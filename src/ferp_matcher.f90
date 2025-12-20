@@ -1,7 +1,7 @@
 module ferp_matcher
   !> Pattern matching orchestration for FERP
   !> Thread-safe: no SAVE variables, all buffers are dynamically allocated
-  use ferp_kinds
+  use ferp_kinds, only: i64, max_pattern_len, pattern_len
   use ferp_options
   use ferp_io
   use ferp_output
@@ -43,7 +43,7 @@ contains
     type(compiled_patterns_t), intent(out) :: compiled
     integer, intent(out) :: ierr
 
-    integer :: i, n
+    integer :: i, n, plen
     logical :: is_ere
     character(len=max_pattern_len) :: pattern
 
@@ -58,12 +58,12 @@ contains
       allocate(compiled%bm_pats(n))
 
       do i = 1, n
-        pattern = patterns(i)
+        plen = pattern_len(patterns(i))
         ! For case-insensitive, convert pattern to lowercase
         if (opts%ignore_case) then
-          call bm_compile(compiled%bm_pats(i), trim(pattern), .true.)
+          call bm_compile(compiled%bm_pats(i), patterns(i)(1:plen), .true.)
         else
-          call bm_compile(compiled%bm_pats(i), trim(pattern), .false.)
+          call bm_compile(compiled%bm_pats(i), patterns(i)(1:plen), .false.)
         end if
       end do
 
@@ -76,19 +76,21 @@ contains
       allocate(compiled%pcres(n))
 
       do i = 1, n
-        pattern = patterns(i)
+        plen = pattern_len(patterns(i))
 
         ! Apply -w (word) transformation using PCRE word boundaries
         if (opts%word_regexp) then
-          pattern = '\b' // trim(pattern) // '\b'
-        end if
-
+          pattern = '\b' // patterns(i)(1:plen) // '\b'
+          plen = plen + 4  ! \b and \b
         ! Apply -x (line) transformation
-        if (opts%line_regexp) then
-          pattern = '^' // trim(pattern) // '$'
+        else if (opts%line_regexp) then
+          pattern = '^' // patterns(i)(1:plen) // '$'
+          plen = plen + 2  ! ^ and $
+        else
+          pattern = patterns(i)(1:plen)
         end if
 
-        call pcre_compile(compiled%pcres(i), trim(pattern), opts%ignore_case, ierr)
+        call pcre_compile(compiled%pcres(i), pattern(1:plen), opts%ignore_case, ierr)
         if (ierr /= 0) then
           compiled%compiled = .false.
           return
@@ -105,19 +107,22 @@ contains
     is_ere = (opts%pattern_type == PATTERN_ERE)
 
     do i = 1, n
-      pattern = patterns(i)
+      plen = pattern_len(patterns(i))
 
       ! Apply -w (word) transformation
       if (opts%word_regexp .and. opts%pattern_type /= PATTERN_FIXED) then
-        pattern = '\<' // trim(pattern) // '\>'
-      end if
-
+        pattern = '\<' // patterns(i)(1:plen) // '\>'
+        plen = plen + 4  ! \< and \>
       ! Apply -x (line) transformation
-      if (opts%line_regexp .and. opts%pattern_type /= PATTERN_FIXED) then
-        pattern = '^' // trim(pattern) // '$'
+      else if (opts%line_regexp .and. opts%pattern_type /= PATTERN_FIXED) then
+        pattern = '^' // patterns(i)(1:plen) // '$'
+        plen = plen + 2  ! ^ and $
+      else
+        pattern = patterns(i)(1:plen)
       end if
 
-      call regex_compile(compiled%regexes(i), trim(pattern), is_ere, ierr)
+      ! Compile with exact pattern length
+      call regex_compile(compiled%regexes(i), pattern(1:plen), is_ere, ierr)
       if (ierr /= 0) then
         compiled%compiled = .false.
         return
@@ -276,7 +281,7 @@ contains
 
     matches = .false.
     line_len = len_trim(line)
-    pat_len = len_trim(pattern)
+    pat_len = pattern_len(pattern)  ! Use pattern_len to preserve whitespace patterns
 
     if (pat_len == 0) then
       ! Empty pattern matches everything
@@ -284,8 +289,8 @@ contains
       return
     end if
 
-    ! Find pattern in line
-    pos = index(line(1:line_len), trim(pattern))
+    ! Find pattern in line (use exact length, not trim)
+    pos = index(line(1:line_len), pattern(1:pat_len))
 
     if (pos == 0) return
 
@@ -552,7 +557,7 @@ contains
     integer, intent(out) :: match_starts(:), match_ends(:)
     integer, intent(out) :: num_matches
 
-    integer :: i, pos, line_len
+    integer :: i, pos, line_len, pat_len
     type(match_result_t) :: res
     type(pcre_match_result_t) :: pcre_res
     character(len=:), allocatable :: search_line
@@ -571,15 +576,19 @@ contains
       end if
 
       do i = 1, size(patterns)
+        ! Get pattern length (preserving whitespace patterns)
+        pat_len = pattern_len(patterns(i))
+        if (pat_len == 0) cycle
+
         if (opts%ignore_case) then
-          search_pattern = to_lower(patterns(i))
+          search_pattern = to_lower(patterns(i)(1:pat_len))
         else
-          search_pattern = patterns(i)
+          search_pattern = patterns(i)(1:pat_len)
         end if
 
         pos = 1
         do while (pos <= line_len)
-          pos = index(search_line(pos:line_len), trim(search_pattern))
+          pos = index(search_line(pos:line_len), search_pattern(1:pat_len))
           if (pos == 0) exit
 
           ! Adjust for substring offset
@@ -590,11 +599,11 @@ contains
           if (num_matches < size(match_starts)) then
             num_matches = num_matches + 1
             match_starts(num_matches) = pos
-            match_ends(num_matches) = pos + len_trim(search_pattern) - 1
+            match_ends(num_matches) = pos + pat_len - 1
           end if
 
           ! Move past this match
-          pos = pos + len_trim(search_pattern)
+          pos = pos + pat_len
         end do
       end do
       return
