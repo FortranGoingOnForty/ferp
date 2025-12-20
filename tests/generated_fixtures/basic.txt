@@ -1,0 +1,8 @@
+hello world
+Hello World
+HELLO WORLD
+goodbye world
+foo bar baz
+The quick brown fox
+testing 123 testing
+line with hello in the middle

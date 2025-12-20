@@ -1,0 +1,2 @@
+has pattern
+another line
