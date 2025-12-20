@@ -77,11 +77,11 @@ contains
       write(output_unit, '(A)', advance='no') char(9)  ! TAB
     end if
 
-    ! Print the line
+    ! Print the line (preserve trailing whitespace)
     if (opts%null_data) then
-      write(output_unit, '(A,A)', advance='no') trim(line), char(0)
+      write(output_unit, '(A,A)', advance='no') line, char(0)
     else
-      write(output_unit, '(A)') trim(line)
+      write(output_unit, '(A)') line
     end if
 
     ! Line-buffered mode
@@ -126,11 +126,11 @@ contains
       write(output_unit, '(A)', advance='no') char(9)
     end if
 
-    ! Print the line
+    ! Print the line (preserve trailing whitespace)
     if (opts%null_data) then
-      write(output_unit, '(A,A)', advance='no') trim(line), char(0)
+      write(output_unit, '(A,A)', advance='no') line, char(0)
     else
-      write(output_unit, '(A)') trim(line)
+      write(output_unit, '(A)') line
     end if
 
     ! Line-buffered mode
@@ -377,11 +377,11 @@ contains
         end if
       end if
     else
-      ! No color - just print the line
+      ! No color - just print the line (preserve trailing whitespace)
       if (opts%null_data) then
-        write(output_unit, '(A,A)', advance='no') trim(line), char(0)
+        write(output_unit, '(A,A)', advance='no') line, char(0)
       else
-        write(output_unit, '(A)') trim(line)
+        write(output_unit, '(A)') line
       end if
     end if
 
