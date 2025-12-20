@@ -176,13 +176,8 @@ contains
       return
     end if
 
-    ! Strip trailing carriage return for Windows line endings (\r\n)
+    ! Get line length (preserve CR like grep)
     line_len = len_trim(buffer)
-    if (line_len > 0) then
-      if (buffer(line_len:line_len) == char(13)) then
-        line_len = line_len - 1
-      end if
-    end if
 
     ! Allocate result string trimmed to actual length
     if (line_len > 0) then

@@ -248,14 +248,8 @@ contains
       end_pos = int(newline_pos, c_size_t) + 1
     end if
 
-    ! Calculate line length (excluding newline)
+    ! Calculate line length (excluding newline, but preserving CR like grep)
     line_len = end_pos - start_pos
-    if (line_len > 0 .and. end_pos > start_pos) then
-      ! Check for CR before LF (Windows line ending)
-      if (file_data(end_pos - 1) == char(13)) then
-        line_len = line_len - 1
-      end if
-    end if
 
     ! Allocate and copy line
     if (line_len > 0) then
@@ -323,14 +317,8 @@ contains
         end_pos = int(newline_pos, c_size_t)
       end if
 
-      ! Calculate line length (excluding newline and CR)
+      ! Calculate line length (excluding newline, but preserving CR like grep)
       line_len = end_pos - start_pos
-      if (line_len > 0 .and. end_pos > start_pos) then
-        ! Check for CR before LF (Windows line ending)
-        if (file_data(end_pos) == char(13)) then
-          line_len = line_len - 1
-        end if
-      end if
 
       ! Store line info
       batch%count = batch%count + 1
