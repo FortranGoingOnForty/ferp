@@ -5,7 +5,7 @@ module ferp_dir
   implicit none
   private
 
-  public :: is_directory, is_regular_file, collect_files
+  public :: is_directory, is_regular_file, is_symlink, collect_files
   public :: glob_match
   public :: read_patterns_from_file, matches_any_pattern
 
@@ -89,6 +89,35 @@ contains
 
   end function is_regular_file
 
+  function is_symlink(path) result(is_link)
+    !> Check if path is a symbolic link using lstat
+    character(len=*), intent(in) :: path
+    logical :: is_link
+
+    character(len=max_path_len+1) :: c_path
+    character(len=STAT_BUF_SIZE), target :: statbuf
+    integer(c_int) :: istat
+    integer :: mode_offset, mode_val
+
+    is_link = .false.
+
+    c_path = trim(path) // c_null_char
+    istat = c_lstat(c_path, c_loc(statbuf))
+
+    if (istat /= 0) return
+
+    ! On Linux x86_64, st_mode is at offset 24 (bytes 25-28)
+    ! st_mode is typically uint32_t
+    mode_offset = 24
+    mode_val = transfer(statbuf(mode_offset+1:mode_offset+4), 0)
+
+    ! S_IFLNK = 0120000 (octal) = 40960 (decimal)
+    ! The file type is in bits 12-15 of mode
+    ! S_IFMT mask = 0170000 (octal) = 61440
+    is_link = iand(mode_val, 61440) == 40960
+
+  end function is_symlink
+
   subroutine collect_files(start_path, file_list, num_files, recursive, &
                            follow_links, include_globs, num_include, &
                            exclude_globs, num_exclude, exclude_dirs, num_exclude_dirs)
@@ -158,6 +187,9 @@ contains
         else
           entry_path = trim(current_dir) // '/' // trim(entry_name)
         end if
+
+        ! Skip symlinks if not following them (like grep -r vs grep -R)
+        if (.not. follow_links .and. is_symlink(entry_path)) cycle
 
         ! Check if it's a directory
         if (is_directory(entry_path)) then
