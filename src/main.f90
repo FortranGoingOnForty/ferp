@@ -35,6 +35,7 @@ program ferp
   integer :: num_exclude_patterns, num_include_patterns
   logical :: any_match, file_match
   logical :: found_early  ! For quiet mode early termination in parallel
+  logical :: has_error  ! Track if any errors occurred (for exit code 2)
 
   ! Parse command-line arguments
   call parse_arguments(opts, patterns, files, ierr)
@@ -114,6 +115,7 @@ program ferp
 
   any_match = .false.
   found_early = .false.
+  has_error = .false.
 
   ! Process input sources
   if (size(files) == 0) then
@@ -128,7 +130,7 @@ program ferp
     ! Process each file with OpenMP parallelization (release builds)
     ! Thread-safe: all buffers are now dynamically allocated per-thread
     !$omp parallel do default(shared) private(src, file_match) &
-    !$omp& reduction(.or.:any_match) schedule(dynamic)
+    !$omp& reduction(.or.:any_match,has_error) schedule(dynamic)
     do i = 1, size(files)
       ! Early termination check for quiet mode
       if (opts%quiet .and. found_early) cycle
@@ -143,7 +145,14 @@ program ferp
             ! This path is rare - usually -r is specified explicitly
             cycle
           case default  ! DIR_READ
-            ! Will try to read directory as file (usually fails)
+            ! Print error message and skip (like grep)
+            if (.not. opts%no_messages) then
+              !$omp critical(error_output)
+              write(error_unit, '(A)') 'ferp: ' // trim(files(i)) // ': Is a directory'
+              !$omp end critical(error_output)
+            end if
+            has_error = .true.
+            cycle
         end select
       end if
 
@@ -178,6 +187,9 @@ program ferp
           if (opts%quiet) found_early = .true.
         end if
         call src%close()
+      else
+        ! File open failed - set error flag
+        has_error = .true.
       end if
     end do
     !$omp end parallel do
@@ -188,7 +200,10 @@ program ferp
 
   ! Exit with appropriate code
   ! 0 = match found, 1 = no match, 2 = error
-  if (any_match) then
+  ! Note: grep returns 2 if there's any error, even with matches
+  if (has_error) then
+    call c_exit(2_c_int)
+  else if (any_match) then
     call c_exit(0_c_int)
   else
     call c_exit(1_c_int)
