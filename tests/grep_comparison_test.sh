@@ -198,7 +198,8 @@ test_grep_compat() {
     should_run "$name" || return 0
 
     log "${CYAN}Testing:${NC} $name"
-    log "  Command: grep $flags '$pattern' $file"
+    log "  grep: grep $flags -- '$pattern' $file"
+    log "  ferp: $FERP $flags -- '$pattern' $file"
 
     if compare_with_grep "$flags" "$pattern" "$file" "$name"; then
         pass "$name"
