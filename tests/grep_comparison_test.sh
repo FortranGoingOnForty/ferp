@@ -617,9 +617,7 @@ test_edge_cases() {
 
     # Whitespace handling
     test_grep_compat "edge: tab character" "" "	" "$FIXTURES/whitespace.txt"
-    # Known issue: ferp has trailing whitespace trimming and tab/space confusion
-    # test_grep_compat "edge: spaces" "" "  " "$FIXTURES/whitespace.txt"
-    skip "edge: spaces" "Known issue: trailing whitespace trimming"
+    test_grep_compat "edge: spaces" "" "  " "$FIXTURES/whitespace.txt"
 }
 
 #------------------------------------------------------------------------------
