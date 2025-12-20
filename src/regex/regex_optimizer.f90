@@ -61,6 +61,10 @@ module regex_optimizer
     integer :: start_state = 0                       ! Starting DFA state
     logical :: compiled = .false.                    ! DFA successfully compiled
     logical :: too_large = .false.                   ! DFA exceeded size limit
+    ! Character equivalence classes
+    integer :: char_to_class(0:255) = 0             ! Maps char code to class index
+    integer :: num_classes = 256                     ! Number of equivalence classes
+    logical :: use_equiv_classes = .false.           ! Using equivalence classes
   end type compiled_dfa_t
 
   !> Optimized NFA with precomputed data
@@ -384,17 +388,124 @@ contains
   end function has_anchor_transitions
 
   !---------------------------------------------------------------------------
+  ! Character Equivalence Classes
+  !---------------------------------------------------------------------------
+
+  subroutine compute_equiv_classes(nfa, char_to_class, num_classes)
+    !> Compute character equivalence classes from NFA transitions
+    !> Characters with identical behavior across all NFA states belong to same class
+    !> This reduces DFA transition table from 256 entries to num_classes entries
+    type(nfa_t), intent(in) :: nfa
+    integer, intent(out) :: char_to_class(0:255)
+    integer, intent(out) :: num_classes
+
+    ! Signature for each character: encodes which transitions it triggers
+    ! We use a simple approach: hash the set of (state, target) pairs for each char
+    integer(8) :: char_signature(0:255)
+    integer :: state, i, c, target
+    type(nfa_transition_t) :: trans
+    integer(8) :: sig
+    integer :: class_map(0:255)  ! signature hash -> class index
+    logical :: found
+
+    ! Initialize all characters to have signature 0 (no transitions)
+    char_signature = 0_8
+
+    ! Build signature for each character based on NFA transitions
+    do state = 1, nfa%num_states
+      do i = 1, nfa%states(state)%num_trans
+        trans = nfa%states(state)%trans(i)
+        target = trans%target
+
+        select case (trans%trans_type)
+          case (TRANS_CHAR)
+            ! Single character transition
+            c = ichar(trans%match_char)
+            ! Add (state, target) to signature using FNV-1a-like hash
+            char_signature(c) = ieor(char_signature(c), &
+                                     int(state * 31 + target, 8) * 1099511628211_8)
+
+          case (TRANS_CLASS)
+            ! Character class transition - add to all matching chars
+            do c = 0, 255
+              if (charclass_test(trans%char_bits, char(c))) then
+                char_signature(c) = ieor(char_signature(c), &
+                                         int(state * 31 + target, 8) * 1099511628211_8)
+              end if
+            end do
+
+          case (TRANS_ANY)
+            ! Dot matches all except newline
+            do c = 0, 255
+              if (c /= 10) then  ! Not newline
+                char_signature(c) = ieor(char_signature(c), &
+                                         int(state * 31 + target, 8) * 1099511628211_8)
+              end if
+            end do
+        end select
+      end do
+    end do
+
+    ! Force each alphabetic character to have a unique signature
+    ! This ensures they get their own equivalence classes, so the case-folding
+    ! code in DFA compilation works correctly (it relies on the class representative
+    ! being alphabetic to compute transitions for both cases)
+    do c = ichar('a'), ichar('z')
+      ! Add unique value to each letter's signature to separate them from non-letters
+      char_signature(c) = ieor(char_signature(c), int(c * 7919 + 1, 8))
+      char_signature(c - 32) = ieor(char_signature(c - 32), int((c - 32) * 7919 + 1, 8))
+    end do
+
+    ! Now group characters by signature
+    num_classes = 0
+    class_map = -1
+    char_to_class = 0
+
+    do c = 0, 255
+      sig = char_signature(c)
+
+      ! Look for existing class with this signature
+      found = .false.
+      do i = 0, num_classes - 1
+        if (class_map(i) /= -1) then
+          ! Check if any character in class i has same signature
+          ! We stored the signature hash as a proxy
+          if (char_signature(class_map(i)) == sig) then
+            char_to_class(c) = i
+            found = .true.
+            exit
+          end if
+        end if
+      end do
+
+      if (.not. found) then
+        ! Create new class
+        char_to_class(c) = num_classes
+        class_map(num_classes) = c  ! Remember one char from this class
+        num_classes = num_classes + 1
+      end if
+    end do
+
+    ! Ensure at least one class
+    if (num_classes == 0) num_classes = 1
+
+  end subroutine compute_equiv_classes
+
+  !---------------------------------------------------------------------------
   ! DFA Compilation: Convert NFA to DFA for O(n) matching
   !---------------------------------------------------------------------------
 
   subroutine compile_dfa(opt)
     !> Compile NFA to DFA using subset construction
-    !> Creates DFA states lazily, stopping if too many states
+    !> Uses character equivalence classes to reduce compilation time
     type(optimized_nfa_t), intent(inout) :: opt
 
     type(state_set_t) :: start_set, next_set
     integer :: worklist(MAX_DFA_STATES), work_head, work_tail
     integer :: dfa_idx, char_code, next_idx, old_num_states
+    integer :: class_idx, c
+    integer :: class_representative(0:255)  ! One char per class
+    integer :: class_transitions(0:255)     ! Computed transition per class
 
     ! Allocate DFA states
     if (allocated(opt%dfa%states)) deallocate(opt%dfa%states)
@@ -403,6 +514,19 @@ contains
     opt%dfa%compiled = .false.
     opt%dfa%too_large = .false.
     opt%use_dfa = .false.
+
+    ! Compute character equivalence classes
+    call compute_equiv_classes(opt%nfa, opt%dfa%char_to_class, opt%dfa%num_classes)
+    opt%dfa%use_equiv_classes = (opt%dfa%num_classes < 256)
+
+    ! Build representative character for each class
+    class_representative = -1
+    do c = 0, 255
+      class_idx = opt%dfa%char_to_class(c)
+      if (class_representative(class_idx) == -1) then
+        class_representative(class_idx) = c
+      end if
+    end do
 
     ! Compute start state: epsilon closure of NFA start
     call start_set%clear()
@@ -427,10 +551,13 @@ contains
       dfa_idx = worklist(work_head)
       work_head = work_head + 1
 
-      ! Compute transitions for all 256 characters
-      ! For case-insensitive matching, we compute transitions for both cases
-      ! and union them so 'a' and 'A' go to the same DFA state
-      do char_code = 0, 255
+      ! First, compute transitions for each equivalence class (not all 256 chars)
+      class_transitions = DFA_DEAD_STATE
+
+      do class_idx = 0, opt%dfa%num_classes - 1
+        char_code = class_representative(class_idx)
+        if (char_code < 0) cycle
+
         call next_set%clear()
 
         ! Compute NFA transitions for this character
@@ -439,11 +566,9 @@ contains
 
         ! For alphabetic characters, also compute transitions for opposite case
         if (char_code >= ichar('a') .and. char_code <= ichar('z')) then
-          ! Also try uppercase
           call compute_char_transitions_simple(opt%nfa, opt%dfa%states(dfa_idx)%nfa_states, &
                                                char(char_code - 32), next_set)
         else if (char_code >= ichar('A') .and. char_code <= ichar('Z')) then
-          ! Also try lowercase
           call compute_char_transitions_simple(opt%nfa, opt%dfa%states(dfa_idx)%nfa_states, &
                                                char(char_code + 32), next_set)
         end if
@@ -454,20 +579,19 @@ contains
         end if
 
         if (next_set%is_empty()) then
-          opt%dfa%states(dfa_idx)%transitions(char_code) = DFA_DEAD_STATE
+          class_transitions(class_idx) = DFA_DEAD_STATE
         else
           ! Find or create DFA state for this NFA state set
           old_num_states = opt%dfa%num_states
           next_idx = find_or_create_dfa_state(opt%dfa, next_set, opt%nfa)
 
           if (next_idx == -1) then
-            ! Too many DFA states - abort
             opt%dfa%too_large = .true.
             opt%dfa%compiled = .false.
             return
           end if
 
-          opt%dfa%states(dfa_idx)%transitions(char_code) = next_idx
+          class_transitions(class_idx) = next_idx
 
           ! Add new state to worklist only if it was just created
           if (opt%dfa%num_states > old_num_states) then
@@ -480,6 +604,12 @@ contains
             worklist(work_tail) = next_idx
           end if
         end if
+      end do
+
+      ! Now fill in the full 256-entry transition table from class transitions
+      do c = 0, 255
+        class_idx = opt%dfa%char_to_class(c)
+        opt%dfa%states(dfa_idx)%transitions(c) = class_transitions(class_idx)
       end do
     end do
 
