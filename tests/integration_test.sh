@@ -1086,8 +1086,9 @@ test_line_prefix() {
         log_test "$name"
         local out
         out=$("$FERP" -nT "hello" "$FIXTURES/simple.txt" | head -1)
-        # Should have tab between prefix and content
-        if echo "$out" | grep -qP '^\d+:\t'; then
+        # Should have tab between prefix and content. -T right-justifies the
+        # line number in a fixed field, so allow grep's leading padding.
+        if echo "$out" | grep -qP '^ *\d+:\t'; then
             pass "$name"
         else
             fail "$name" "got: $out"
@@ -1099,7 +1100,7 @@ test_line_prefix() {
         log_test "$name"
         local out
         out=$("$FERP" -n --initial-tab "hello" "$FIXTURES/simple.txt" | head -1)
-        if echo "$out" | grep -qP '^\d+:\t'; then
+        if echo "$out" | grep -qP '^ *\d+:\t'; then
             pass "$name"
         else
             fail "$name"
