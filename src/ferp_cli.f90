@@ -9,7 +9,9 @@ module ferp_cli
 
   public :: parse_arguments, print_help, print_version
 
-  character(len=*), parameter :: VERSION = '0.1.0'
+  !> Single source of truth for the version. CI checks that PKGBUILD,
+  !> .SRCINFO and the Homebrew formula all agree with this string.
+  character(len=*), parameter :: VERSION = '0.10.0'
 
   interface
     subroutine c_exit(status) bind(C, name="exit")
