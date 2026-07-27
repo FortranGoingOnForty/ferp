@@ -7,11 +7,11 @@ CC = clang
 
 # Compiler flags
 FFLAGS_COMMON = -std=f2008 -Wall -Wextra -pedantic -cpp
-FFLAGS_DEBUG = $(FFLAGS_COMMON) -g -O0 -fcheck=all -fbacktrace -Wno-unused-dummy-argument
+FFLAGS_DEBUG = $(FFLAGS_COMMON) -g -O0 -fcheck=all -fbacktrace
 FFLAGS_RELEASE = $(FFLAGS_COMMON) -O2 -march=native -fopenmp
 
 CFLAGS_DEBUG = -g -O0 -Wall
-CFLAGS_RELEASE = -O2 -march=native
+CFLAGS_RELEASE = -O2 -march=native -Wall
 
 # Default to debug build (release includes OpenMP)
 FFLAGS = $(FFLAGS_DEBUG)

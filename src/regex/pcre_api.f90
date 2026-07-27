@@ -212,22 +212,19 @@ contains
   !---------------------------------------------------------------------------
   ! Match pattern against text (returns true if matches anywhere)
   !---------------------------------------------------------------------------
-  function pcre_match(re, text, ignore_case) result(matched)
+  !> Case sensitivity is fixed when the pattern is compiled, so pass
+  !> ignore_case to pcre_compile rather than here.
+  function pcre_match(re, text) result(matched)
     type(pcre_t), intent(in) :: re
     character(len=*), intent(in) :: text
-    logical, intent(in), optional :: ignore_case
     logical :: matched
 
     type(pcre_match_result_t) :: res
-    logical :: icase
 
     matched = .false.
     if (.not. re%compiled) return
 
-    icase = .false.
-    if (present(ignore_case)) icase = ignore_case
-
-    res = pcre_search(re, text, icase)
+    res = pcre_search(re, text)
     matched = res%matched
 
   end function pcre_match
@@ -235,10 +232,11 @@ contains
   !---------------------------------------------------------------------------
   ! Search for pattern in text, return match result with positions
   !---------------------------------------------------------------------------
-  function pcre_search(re, text, ignore_case, start_offset) result(res)
+  !> Case sensitivity is fixed when the pattern is compiled, so pass
+  !> ignore_case to pcre_compile rather than here.
+  function pcre_search(re, text, start_offset) result(res)
     type(pcre_t), intent(in) :: re
     character(len=*), intent(in) :: text
-    logical, intent(in), optional :: ignore_case
     integer, intent(in), optional :: start_offset
     type(pcre_match_result_t) :: res
 
