@@ -7,6 +7,7 @@ program ferp
   use ferp_io
   use ferp_dir
   use ferp_matcher
+  use ferp_output, only: init_capture_slots, begin_capture, end_capture, emit_raw
   use, intrinsic :: iso_c_binding, only: c_int
   use, intrinsic :: iso_fortran_env, only: error_unit
 #ifdef _OPENMP
@@ -20,6 +21,12 @@ program ferp
       integer(c_int), value :: status
     end subroutine c_exit
   end interface
+
+  !> Holds one file's captured output so the parallel search can be replayed
+  !> in command-line order. Unallocated for files that produced nothing.
+  type :: outbuf_t
+    character(len=:), allocatable :: s
+  end type outbuf_t
 
   type(grep_options) :: opts
   character(len=max_pattern_len), allocatable :: patterns(:)
@@ -36,6 +43,8 @@ program ferp
   logical :: any_match, file_match
   logical :: found_early  ! For quiet mode early termination in parallel
   logical :: has_error  ! Track if any errors occurred (for exit code 2)
+  type(outbuf_t), allocatable :: outbufs(:)
+  logical :: use_capture
 
   ! Parse command-line arguments
   call parse_arguments(opts, patterns, files, ierr)
@@ -127,9 +136,45 @@ program ferp
       call src%close()
     end if
   else
-    ! Process each file with OpenMP parallelization (release builds)
-    ! Thread-safe: all buffers are now dynamically allocated per-thread
-    !$omp parallel do default(shared) private(src, file_match) &
+    ! Searching files concurrently would interleave their output, but grep
+    ! prints whole files in command-line order. So when we go parallel each
+    ! file's output is captured to its own buffer and replayed in order below.
+    !
+    ! --line-buffered asks for output as it is produced, which is
+    ! incompatible with buffering, so that case runs serially instead and
+    ! streams straight to stdout. A single file streams for the same reason:
+    ! it keeps `ferp pattern huge.log | head` responsive.
+#ifdef _OPENMP
+    use_capture = (size(files) > 1) .and. .not. opts%line_buffered
+#else
+    ! Serial build: the loop already emits files in order, so stream straight
+    ! to stdout instead of holding every file's output in memory.
+    use_capture = .false.
+#endif
+    if (use_capture) then
+      allocate(outbufs(size(files)))
+      call init_capture_slots()
+    end if
+
+    ! WARNING: this loop is NOT thread-safe, which is why the release build no
+    ! longer passes -fopenmp. gfortran (checked through 16.1.1, and unaffected
+    ! by -frecursive) stores the length temporary of every deferred-length
+    ! `character(len=:), allocatable` assignment in shared static storage --
+    ! `nm` shows them as `slen.*` in ferp_io.o, ferp_matcher.o and
+    ! ferp_output.o. Two threads assigning such a string at once clobber each
+    ! other's length, which truncates and duplicates output. ThreadSanitizer
+    ! reports it against e.g. ferp_matcher.f90's `line = src%get_line_text(..)`.
+    !
+    ! Re-enabling -fopenmp requires first rewriting those paths to use
+    ! fixed-length buffers with explicit length variables. The capture
+    ! machinery below is kept because it is what keeps output in command-line
+    ! order once the loop does run in parallel.
+    !
+    ! opts and compiled are firstprivate because process_source writes per-file
+    ! state into both (opts%line_number_width for -T, and the optimizer's DFA
+    ! cache inside compiled).
+    !$omp parallel do if(use_capture) default(shared) private(src, file_match) &
+    !$omp& firstprivate(opts, compiled) &
     !$omp& reduction(.or.:any_match,has_error) schedule(dynamic)
     do i = 1, size(files)
       ! Early termination check for quiet mode
@@ -183,8 +228,11 @@ program ferp
       end if
 
       if (src%open(trim(files(i)), opts%no_messages, opts%null_data)) then
-        ! No critical section here - output functions are thread-safe
+        ! Capture wraps process_source only. Every cycle above happens before
+        ! this point, so begin/end always pair up.
+        if (use_capture) call begin_capture()
         file_match = process_source(src, patterns, opts, compiled)
+        if (use_capture) call end_capture(outbufs(i)%s)
         if (file_match) then
           any_match = .true.
           ! Signal early termination for quiet mode
@@ -197,6 +245,14 @@ program ferp
       end if
     end do
     !$omp end parallel do
+
+    ! Replay the captured output in command-line order
+    if (use_capture) then
+      do i = 1, size(files)
+        if (allocated(outbufs(i)%s)) call emit_raw(outbufs(i)%s)
+      end do
+      deallocate(outbufs)
+    end if
   end if
 
   ! Clean up compiled patterns

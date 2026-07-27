@@ -8,7 +8,12 @@ CC = clang
 # Compiler flags
 FFLAGS_COMMON = -std=f2008 -Wall -Wextra -pedantic -cpp
 FFLAGS_DEBUG = $(FFLAGS_COMMON) -g -O0 -fcheck=all -fbacktrace
-FFLAGS_RELEASE = $(FFLAGS_COMMON) -O2 -march=native -fopenmp
+# NOTE: deliberately no -fopenmp. See the warning above the parallel do in
+# src/main.f90 -- multi-threaded search corrupts output with this compiler,
+# because gfortran keeps the length temporary of every deferred-length
+# character assignment in shared static storage. Do not add it back without
+# reading that comment.
+FFLAGS_RELEASE = $(FFLAGS_COMMON) -O2 -march=native
 
 CFLAGS_DEBUG = -g -O0 -Wall
 CFLAGS_RELEASE = -O2 -march=native -Wall
