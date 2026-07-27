@@ -3,6 +3,9 @@ name: Tests
 on:
   push:
     branches: [trunk]
+    # Release tags too, so the whole suite runs against the exact commit
+    # being packaged and the tag-vs-VERSION check below actually fires.
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
