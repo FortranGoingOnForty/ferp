@@ -648,8 +648,11 @@ test_binary_files() {
     name="binary: -a treat as text"
     should_run "$name" && {
         local grep_out ferp_out grep_exit ferp_exit
-        grep_out=$(grep -a 'text' "$FIXTURES/binary.bin" 2>/dev/null | head -1) && grep_exit=0 || grep_exit=$?
-        ferp_out=$("$FERP" -a 'text' "$FIXTURES/binary.bin" 2>/dev/null | head -1) && ferp_exit=0 || ferp_exit=$?
+        # No "| head -1" here: with `set -o pipefail` an early-closing head
+        # makes the pipeline report 141 (SIGPIPE) whenever the writer has not
+        # finished yet, which is a race. Only the exit codes are compared.
+        grep_out=$(grep -a 'text' "$FIXTURES/binary.bin" 2>/dev/null) && grep_exit=0 || grep_exit=$?
+        ferp_out=$("$FERP" -a 'text' "$FIXTURES/binary.bin" 2>/dev/null) && ferp_exit=0 || ferp_exit=$?
         if [[ "$grep_exit" == "$ferp_exit" ]]; then
             pass "$name"
         else
