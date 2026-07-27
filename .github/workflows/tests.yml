@@ -1,0 +1,265 @@
+name: Tests
+
+on:
+  push:
+    branches: [trunk]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push makes the previous run's answer irrelevant.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (warning-free)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gfortran clang libpcre2-dev
+
+      # ferp ships via paru/Homebrew, so users watch this build scroll past.
+      # Warnings are treated as failures to keep it quiet; see the -Wall/-Wextra
+      # flags in the Makefile.
+      - name: Release build must be warning-free
+        run: |
+          set -o pipefail
+          make clean || true
+          make release 2>&1 | tee build.log
+          if grep -qiE '^(Warning|.*: warning)' build.log; then
+            echo "::error::release build produced warnings"
+            grep -iE -B2 -A4 '^(Warning|.*: warning)' build.log
+            exit 1
+          fi
+
+      - name: Debug build must be warning-free
+        run: |
+          set -o pipefail
+          make clean
+          make debug 2>&1 | tee debug.log
+          if grep -qiE '^(Warning|.*: warning)' debug.log; then
+            echo "::error::debug build produced warnings"
+            grep -iE -B2 -A4 '^(Warning|.*: warning)' debug.log
+            exit 1
+          fi
+
+      - name: Version reports
+        run: |
+          make clean && make release
+          ./ferp --version
+
+  tests:
+    name: Test suites
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gfortran clang libpcre2-dev
+
+      - name: Build
+        run: make release
+
+      # The suites diff ferp against the system grep, so record which one.
+      - name: Reference grep
+        run: grep --version | head -1
+
+      - name: Integration suite
+        run: bash tests/integration_test.sh
+
+      - name: Extended suite
+        run: bash tests/extended_grep_test.sh
+
+      - name: Comparison suite (vs GNU grep)
+        run: bash tests/grep_comparison_test.sh
+
+      - name: Makefile smoke tests
+        run: make test
+
+      # The suites regenerate their fixtures; a dirty tree afterwards means a
+      # generated file is tracked, which is how link_to_basic.txt used to make
+      # every run look modified.
+      - name: Test run leaves the tree clean
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::test run modified tracked files"
+            git status --porcelain
+            git diff
+            exit 1
+          fi
+
+  determinism:
+    name: Output determinism
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gfortran clang libpcre2-dev
+
+      - name: Build
+        run: make release
+
+      # Guards the class of bug that made multi-file output unreliable: search
+      # results must not depend on scheduling, and must come out in
+      # command-line order. Both were violated by the OpenMP file loop, so if
+      # anyone re-enables -fopenmp without fixing the deferred-length string
+      # handling (see the comment in src/main.f90), this fails.
+      - name: Recursive search is byte-identical across 50 runs
+        run: |
+          bash tests/extended_grep_test.sh >/dev/null 2>&1 || true
+          ref=$(./ferp -r match tests/extended_fixtures/recursive | sort | md5sum)
+          echo "reference: $ref"
+          for i in $(seq 1 50); do
+            got=$(./ferp -r match tests/extended_fixtures/recursive | sort | md5sum)
+            if [ "$got" != "$ref" ]; then
+              echo "::error::run $i differed from the reference output"
+              ./ferp -r match tests/extended_fixtures/recursive | sort
+              exit 1
+            fi
+          done
+
+      - name: Multi-file output matches grep's order
+        run: |
+          # Generates tests/generated_fixtures, including multi1..3.txt
+          bash tests/grep_comparison_test.sh >/dev/null 2>&1 || true
+          cd tests/generated_fixtures
+          for flags in -n -c -l -H -v -i; do
+            a=$(../../ferp $flags pattern multi1.txt multi2.txt multi3.txt || true)
+            b=$(grep $flags pattern multi1.txt multi2.txt multi3.txt || true)
+            if [ "$a" != "$b" ]; then
+              echo "::error::ferp $flags multi-file output differs from grep"
+              diff <(printf '%s\n' "$a") <(printf '%s\n' "$b") || true
+              exit 1
+            fi
+          done
+
+      # Filenames are opaque byte strings; ferp used to truncate them at the
+      # first non-ASCII byte and fail to open the file.
+      - name: Non-ASCII filenames
+        run: |
+          d=$(mktemp -d)
+          printf 'needle here\n' > "$d/café.txt"
+          printf 'needle here\n' > "$d/plain.txt"
+          a=$(./ferp -r needle "$d" | sed "s|$d/||" | sort)
+          b=$(grep -r needle "$d" | sed "s|$d/||" | sort)
+          if [ "$a" != "$b" ]; then
+            echo "::error::non-ASCII filename handling differs from grep"
+            diff <(printf '%s\n' "$a") <(printf '%s\n' "$b") || true
+            exit 1
+          fi
+
+  hygiene:
+    name: Repo hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # ferp_cli.f90 is the single source of truth for the version. The AUR
+      # PKGBUILD and the Homebrew formula live in other repos and cannot be
+      # checked from here, but a tag that disagrees with the source can:
+      # --version reported 0.1.0 for the whole 0.9.x line because nothing
+      # ever compared the two.
+      - name: Tag matches the version in ferp_cli.f90
+        run: |
+          ver=$(grep -oP "VERSION = '\K[0-9][0-9.]*" src/ferp_cli.f90)
+          echo "ferp_cli.f90 VERSION = $ver"
+          if [ -z "$ver" ]; then
+            echo "::error::could not read VERSION from src/ferp_cli.f90"
+            exit 1
+          fi
+          case "${GITHUB_REF}" in
+            refs/tags/v*)
+              tag="${GITHUB_REF#refs/tags/v}"
+              echo "tag = $tag"
+              if [ "$tag" != "$ver" ]; then
+                echo "::error::tag v$tag does not match VERSION $ver"
+                exit 1
+              fi
+              ;;
+            *)
+              echo "not a tag build; nothing to compare against"
+              ;;
+          esac
+
+      - name: No tracked build artifacts
+        run: |
+          bad=$(git ls-files | grep -E '\.(o|a|mod|rej|orig)$' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::tracked build artifacts"; echo "$bad"; exit 1
+          fi
+
+      - name: No tracked compiled binaries
+        run: |
+          bad=$(git ls-files -z | xargs -0 file --mime-type \
+                | grep -E 'application/x-(executable|sharedlib|pie-executable|mach-binary)' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::tracked compiled binaries"; echo "$bad"; exit 1
+          fi
+
+  macos:
+    name: macOS build and tests
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: brew install gcc pcre2
+
+      # Homebrew ships this build, and the directory walk reads struct stat
+      # and struct dirent -- whose layouts differ from Linux. That is why
+      # those fields are read in src/ferp_posix.c rather than at fixed
+      # offsets; this job is what keeps that honest.
+      - name: Build
+        run: make -j1 release FC=gfortran
+
+      - name: Version reports
+        run: ./ferp --version
+
+      - name: Smoke test
+        run: |
+          echo "hello world" | ./ferp hello
+          printf 'a\nb\n' | ./ferp -c .
+
+      # BSD grep differs from GNU grep in output details, so the comparison
+      # suites are not meaningful here. These check ferp against itself:
+      # that the directory walk sees the right entries and file types.
+      - name: Recursive search finds every file
+        run: |
+          d=$(mktemp -d)
+          mkdir -p "$d/sub/deeper"
+          printf 'needle\n' > "$d/top.txt"
+          printf 'needle\n' > "$d/sub/mid.txt"
+          printf 'needle\n' > "$d/sub/deeper/low.txt"
+          printf 'needle\n' > "$d/café.txt"
+          got=$(./ferp -r needle "$d" | wc -l | tr -d ' ')
+          if [ "$got" != "4" ]; then
+            echo "::error::expected 4 matches from the recursive walk, got $got"
+            ./ferp -r needle "$d"
+            exit 1
+          fi
+
+      - name: Symlinks are skipped by -r and followed by -R
+        run: |
+          d=$(mktemp -d)
+          printf 'needle\n' > "$d/real.txt"
+          mkdir "$d/tree"
+          ln -s "$d/real.txt" "$d/tree/link.txt"
+          r=$(./ferp -r needle "$d/tree" | wc -l | tr -d ' ')
+          R=$(./ferp -R needle "$d/tree" | wc -l | tr -d ' ')
+          echo "-r: $r  -R: $R"
+          if [ "$r" != "0" ] || [ "$R" != "1" ]; then
+            echo "::error::symlink handling wrong (is_symlink reads st_mode)"
+            exit 1
+          fi
