@@ -49,8 +49,9 @@ REGEX_SRCS = $(REGEX_DIR)/regex_charclass.f90 \
              $(REGEX_DIR)/regex_api.f90 \
              $(REGEX_DIR)/pcre_api.f90
 
-# C source files (SIMD support)
-C_SRCS = $(SRC_DIR)/simd_scan.c
+# C source files (SIMD support, POSIX struct accessors)
+C_SRCS = $(SRC_DIR)/simd_scan.c \
+         $(SRC_DIR)/ferp_posix.c
 
 # Main source files (in dependency order)
 MAIN_SRCS = $(SRC_DIR)/ferp_kinds.f90 \
@@ -125,7 +126,7 @@ $(BUILD_DIR)/ferp_simd.o: $(BUILD_DIR)/simd_scan.o
 $(BUILD_DIR)/ferp_mmap.o: $(BUILD_DIR)/ferp_kinds.o $(BUILD_DIR)/ferp_simd.o
 $(BUILD_DIR)/ferp_io.o: $(BUILD_DIR)/ferp_kinds.o $(BUILD_DIR)/ferp_mmap.o
 $(BUILD_DIR)/ferp_output.o: $(BUILD_DIR)/ferp_kinds.o $(BUILD_DIR)/ferp_options.o
-$(BUILD_DIR)/ferp_dir.o: $(BUILD_DIR)/ferp_kinds.o
+$(BUILD_DIR)/ferp_dir.o: $(BUILD_DIR)/ferp_kinds.o $(BUILD_DIR)/ferp_posix.o
 $(BUILD_DIR)/ferp_search.o: $(BUILD_DIR)/ferp_kinds.o
 $(BUILD_DIR)/ferp_cli.o: $(BUILD_DIR)/ferp_kinds.o $(BUILD_DIR)/ferp_options.o
 $(BUILD_DIR)/ferp_matcher.o: $(BUILD_DIR)/ferp_kinds.o $(BUILD_DIR)/ferp_options.o $(BUILD_DIR)/ferp_io.o $(BUILD_DIR)/ferp_output.o $(BUILD_DIR)/ferp_search.o $(BUILD_DIR)/regex_api.o $(BUILD_DIR)/pcre_api.o

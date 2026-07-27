@@ -29,23 +29,35 @@ module ferp_dir
       integer(c_int) :: c_closedir
     end function c_closedir
 
-    function c_stat(pathname, statbuf) bind(C, name="stat")
-      import :: c_char, c_int, c_ptr
-      character(kind=c_char), intent(in) :: pathname(*)
-      type(c_ptr), value :: statbuf
-      integer(c_int) :: c_stat
-    end function c_stat
+    ! Implemented in src/ferp_posix.c. struct stat and struct dirent have
+    ! platform-dependent layouts, so their fields are read in C where the
+    ! real headers are visible rather than at hard-coded byte offsets.
+    function c_is_dir(path) bind(C, name="ferp_is_dir")
+      import :: c_char, c_int
+      character(kind=c_char), intent(in) :: path(*)
+      integer(c_int) :: c_is_dir
+    end function c_is_dir
 
-    function c_lstat(pathname, statbuf) bind(C, name="lstat")
-      import :: c_char, c_int, c_ptr
-      character(kind=c_char), intent(in) :: pathname(*)
-      type(c_ptr), value :: statbuf
-      integer(c_int) :: c_lstat
-    end function c_lstat
+    function c_is_lnk(path) bind(C, name="ferp_is_lnk")
+      import :: c_char, c_int
+      character(kind=c_char), intent(in) :: path(*)
+      integer(c_int) :: c_is_lnk
+    end function c_is_lnk
+
+    function c_is_reg(path) bind(C, name="ferp_is_reg")
+      import :: c_char, c_int
+      character(kind=c_char), intent(in) :: path(*)
+      integer(c_int) :: c_is_reg
+    end function c_is_reg
+
+    function c_dirent_name(entry, buf, bufsize) bind(C, name="ferp_dirent_name")
+      import :: c_ptr, c_char, c_int
+      type(c_ptr), value :: entry
+      character(kind=c_char), intent(out) :: buf(*)
+      integer(c_int), value :: bufsize
+      integer(c_int) :: c_dirent_name
+    end function c_dirent_name
   end interface
-
-  ! Size of struct stat varies by platform, use generous size
-  integer, parameter :: STAT_BUF_SIZE = 256
 
 contains
 
@@ -54,67 +66,25 @@ contains
     character(len=*), intent(in) :: path
     logical :: is_dir
 
-    type(c_ptr) :: dirp
-    character(len=max_path_len+1) :: c_path
-    integer(c_int) :: istat
-
-    is_dir = .false.
-
-    ! Try to open as directory
-    c_path = trim(path) // c_null_char
-    dirp = c_opendir(c_path)
-
-    if (c_associated(dirp)) then
-      is_dir = .true.
-      istat = c_closedir(dirp)
-    end if
+    is_dir = (c_is_dir(trim(path) // c_null_char) /= 0)
 
   end function is_directory
 
   function is_regular_file(path) result(is_file)
-    !> Check if path is a regular file (not directory, symlink, etc.)
+    !> Check if path is a regular file (not a directory, device, fifo or socket)
     character(len=*), intent(in) :: path
     logical :: is_file
 
-    logical :: exists
-
-    is_file = .false.
-
-    ! Use Fortran inquire
-    inquire(file=path, exist=exists)
-    if (.not. exists) return
-
-    ! If it's not a directory, treat as regular file
-    is_file = .not. is_directory(path)
+    is_file = (c_is_reg(trim(path) // c_null_char) /= 0)
 
   end function is_regular_file
 
   function is_symlink(path) result(is_link)
-    !> Check if path is a symbolic link using lstat
+    !> Check if path is a symbolic link
     character(len=*), intent(in) :: path
     logical :: is_link
 
-    character(len=max_path_len+1) :: c_path
-    character(len=STAT_BUF_SIZE), target :: statbuf
-    integer(c_int) :: istat
-    integer :: mode_offset, mode_val
-
-    is_link = .false.
-
-    c_path = trim(path) // c_null_char
-    istat = c_lstat(c_path, c_loc(statbuf))
-
-    if (istat /= 0) return
-
-    ! On Linux x86_64, st_mode is at offset 24 (bytes 25-28)
-    ! st_mode is typically uint32_t
-    mode_offset = 24
-    mode_val = transfer(statbuf(mode_offset+1:mode_offset+4), 0)
-
-    ! S_IFLNK = 0120000 (octal) = 40960 (decimal)
-    ! The file type is in bits 12-15 of mode
-    ! S_IFMT mask = 0170000 (octal) = 61440
-    is_link = iand(mode_val, 61440) == 40960
+    is_link = (c_is_lnk(trim(path) // c_null_char) /= 0)
 
   end function is_symlink
 
@@ -227,42 +197,25 @@ contains
   end subroutine collect_files
 
   subroutine get_dirent_name(entry_ptr, name)
-    !> Extract filename from dirent struct pointer
+    !> Extract filename from a dirent struct pointer.
+    !> The copy is done in C so that d_name's offset comes from the real
+    !> header, and so the bytes are taken verbatim -- filenames are opaque
+    !> byte strings, and the old printable-only scan truncated every
+    !> non-ASCII name.
     type(c_ptr), intent(in) :: entry_ptr
     character(len=*), intent(out) :: name
 
-    ! dirent.d_name starts at offset after d_ino and d_off (platform dependent)
-    ! On most systems, d_name is at offset ~19-21 bytes
-    ! We'll use a more robust approach: scan for printable chars
-    character(len=256, kind=c_char), pointer :: raw_data
-    integer :: i, start_pos, name_len
+    character(len=1, kind=c_char) :: buf(max_path_len + 1)
+    integer :: i, n
 
     name = ''
     if (.not. c_associated(entry_ptr)) return
 
-    ! Map memory to character array
-    call c_f_pointer(entry_ptr, raw_data)
+    n = int(c_dirent_name(entry_ptr, buf, int(max_path_len + 1, c_int)))
+    if (n > len(name)) n = len(name)
 
-    ! On macOS/Linux, d_name typically starts around byte 19-21
-    ! Find start of name by scanning for first printable character after struct header
-    ! Starting from offset 19 works on both platforms
-    start_pos = 19
-
-    ! Find actual start (first printable character after header)
-    do i = start_pos, min(40, len(raw_data))
-      if (ichar(raw_data(i:i)) >= 32 .and. ichar(raw_data(i:i)) < 127) then
-        start_pos = i
-        exit
-      end if
-    end do
-
-    ! Copy name until null terminator
-    name_len = 0
-    do i = start_pos, min(start_pos + max_path_len - 1, len(raw_data))
-      if (raw_data(i:i) == c_null_char) exit
-      if (ichar(raw_data(i:i)) < 32 .or. ichar(raw_data(i:i)) >= 127) exit
-      name_len = name_len + 1
-      name(name_len:name_len) = raw_data(i:i)
+    do i = 1, n
+      name(i:i) = buf(i)
     end do
 
   end subroutine get_dirent_name
