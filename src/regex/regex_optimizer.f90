@@ -1565,33 +1565,6 @@ contains
     end if
   end function to_lower_char
 
-  function char_in_class_opt(c, char_class, negated, ignore_case) result(res)
-    character(len=1), intent(in) :: c
-    logical, intent(in) :: char_class(0:255)
-    logical, intent(in) :: negated, ignore_case
-    logical :: res
-
-    integer :: ic
-    character(len=1) :: c_lower, c_upper
-
-    ic = ichar(c)
-    res = char_class(ic)
-
-    if (ignore_case .and. .not. res) then
-      c_lower = to_lower_char(c)
-      if (c_lower /= c) res = char_class(ichar(c_lower))
-      if (.not. res) then
-        ic = ichar(c)
-        if (ic >= ichar('a') .and. ic <= ichar('z')) then
-          c_upper = char(ic - 32)
-          res = char_class(ichar(c_upper))
-        end if
-      end if
-    end if
-
-    if (negated) res = .not. res
-  end function char_in_class_opt
-
   !---------------------------------------------------------------------------
   ! Aho-Corasick Integration for Alternation Patterns
   !---------------------------------------------------------------------------
