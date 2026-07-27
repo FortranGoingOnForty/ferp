@@ -1231,7 +1231,7 @@ contains
 
       ! Compute next states with DFA caching
       call next_set%clear()
-      call step_with_cache(opt, current, c, pos, text, text_len, ignore_case, next_set)
+      call step_with_cache(opt, current, c, ignore_case, next_set)
 
       ! Compute epsilon closure
       call current%clear()
@@ -1327,15 +1327,15 @@ contains
     end do
   end subroutine expand_epsilon_closure
 
-  subroutine step_with_cache(opt, current, c, pos, text, text_len, ignore_case, next_set)
+  subroutine step_with_cache(opt, current, c, ignore_case, next_set)
     !> Compute next states with DFA caching
     !> Cache key: (state_set_hash, char_code, ignore_case)
     !> This avoids recomputing transitions for repeated (state_set, char) pairs
+    !> Position/text context is not needed here: anchors are handled by
+    !> expand_epsilon_closure, this only follows character-consuming transitions.
     type(optimized_nfa_t), intent(inout) :: opt
     type(state_set_t), intent(in) :: current
     character(len=1), intent(in) :: c
-    integer, intent(in) :: pos, text_len
-    character(len=*), intent(in) :: text
     logical, intent(in) :: ignore_case
     type(state_set_t), intent(inout) :: next_set
 
@@ -1640,7 +1640,7 @@ contains
     logical, intent(out) :: is_simple
 
     integer :: i, pat_len, alt_start, alt_len
-    character(len=1) :: c, next_c
+    character(len=1) :: c
     logical :: in_escape
 
     is_simple = .true.

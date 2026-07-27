@@ -43,7 +43,7 @@ contains
     type(compiled_patterns_t), intent(out) :: compiled
     integer, intent(out) :: ierr
 
-    integer :: i, j, n, plen, total_subpats, subpat_count
+    integer :: i, j, n, plen, total_subpats
     logical :: is_ere
     character(len=max_pattern_len) :: pattern
     character(len=max_pattern_len), allocatable :: subpatterns(:)

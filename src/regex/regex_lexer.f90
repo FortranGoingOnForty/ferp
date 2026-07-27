@@ -52,7 +52,7 @@ contains
           tok%char_val = '\'
           i = i + 1
         else
-          call parse_escape(pattern, i, n, tok, is_ere, ierr)
+          call parse_escape(pattern, i, tok, is_ere, ierr)
           if (ierr /= 0) return
         end if
         call tokens%append(tok)
@@ -158,11 +158,11 @@ contains
 
   end subroutine tokenize
 
-  subroutine parse_escape(pattern, pos, n, tok, is_ere, ierr)
+  subroutine parse_escape(pattern, pos, tok, is_ere, ierr)
     !> Parse an escape sequence starting at pos (which points to \)
+    !> The caller guarantees at least one character follows the backslash.
     character(len=*), intent(in) :: pattern
     integer, intent(inout) :: pos
-    integer, intent(in) :: n
     type(token_t), intent(out) :: tok
     logical, intent(in) :: is_ere
     integer, intent(out) :: ierr

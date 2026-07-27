@@ -188,8 +188,12 @@ contains
           entry_path = trim(current_dir) // '/' // trim(entry_name)
         end if
 
-        ! Skip symlinks if not following them (like grep -r vs grep -R)
-        if (.not. follow_links .and. is_symlink(entry_path)) cycle
+        ! Skip symlinks if not following them (like grep -r vs grep -R).
+        ! Nested rather than .and. so the stat() call is only made when
+        ! needed -- Fortran does not guarantee short-circuit evaluation.
+        if (.not. follow_links) then
+          if (is_symlink(entry_path)) cycle
+        end if
 
         ! Check if it's a directory
         if (is_directory(entry_path)) then

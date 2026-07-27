@@ -135,25 +135,29 @@ program ferp
       ! Early termination check for quiet mode
       if (opts%quiet .and. found_early) cycle
 
-      ! Check for directory and handle according to dir_action
-      if (.not. opts%recursive .and. is_directory(trim(files(i)))) then
-        select case (opts%dir_action)
-          case (DIR_SKIP)
-            cycle  ! Skip directories silently
-          case (DIR_RECURSE)
-            ! Note: In parallel mode, we can't modify opts
-            ! This path is rare - usually -r is specified explicitly
-            cycle
-          case default  ! DIR_READ
-            ! Print error message and skip (like grep)
-            if (.not. opts%no_messages) then
-              !$omp critical(error_output)
-              write(error_unit, '(A)') 'ferp: ' // trim(files(i)) // ': Is a directory'
-              !$omp end critical(error_output)
-            end if
-            has_error = .true.
-            cycle
-        end select
+      ! Check for directory and handle according to dir_action.
+      ! Nested rather than .and. so the stat() call is only made when
+      ! needed -- Fortran does not guarantee short-circuit evaluation.
+      if (.not. opts%recursive) then
+        if (is_directory(trim(files(i)))) then
+          select case (opts%dir_action)
+            case (DIR_SKIP)
+              cycle  ! Skip directories silently
+            case (DIR_RECURSE)
+              ! Note: In parallel mode, we can't modify opts
+              ! This path is rare - usually -r is specified explicitly
+              cycle
+            case default  ! DIR_READ
+              ! Print error message and skip (like grep)
+              if (.not. opts%no_messages) then
+                !$omp critical(error_output)
+                write(error_unit, '(A)') 'ferp: ' // trim(files(i)) // ': Is a directory'
+                !$omp end critical(error_output)
+              end if
+              has_error = .true.
+              cycle
+          end select
+        end if
       end if
 
       ! Check include patterns from file

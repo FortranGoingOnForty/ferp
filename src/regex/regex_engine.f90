@@ -51,8 +51,7 @@ contains
       ! Compute next states
       num_next = 0
       do i = 1, num_current
-        call step(nfa, current(i), c, pos, text, text_len, ignore_case, &
-                  next_states, num_next)
+        call step(nfa, current(i), c, ignore_case, next_states, num_next)
       end do
 
       ! Compute epsilon closure of next states
@@ -163,13 +162,13 @@ contains
 
   end subroutine epsilon_closure
 
-  subroutine step(nfa, state, c, pos, text, text_len, ignore_case, next_states, num_next)
+  subroutine step(nfa, state, c, ignore_case, next_states, num_next)
     !> Take one step from state on character c
+    !> Position/text context is not needed here: anchors are handled by
+    !> epsilon_closure, this only follows character-consuming transitions.
     type(nfa_t), intent(in) :: nfa
     integer, intent(in) :: state
     character(len=1), intent(in) :: c
-    integer, intent(in) :: pos, text_len
-    character(len=*), intent(in) :: text
     logical, intent(in) :: ignore_case
     integer, intent(inout) :: next_states(MAX_STATES)
     integer, intent(inout) :: num_next

@@ -51,7 +51,7 @@ contains
     logical, intent(in) :: ignore_case
     integer, intent(out) :: ierr
 
-    integer :: i, j, c, state, next_state, child
+    integer :: i, j, c, state, child
     integer, allocatable :: queue(:)
     integer :: q_head, q_tail
     integer :: fail_state
