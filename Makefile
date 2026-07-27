@@ -214,7 +214,10 @@ test: $(TARGET)
 	@./ferp -r --exclude="*output*" "module" src/ | grep -qv "ferp_output" && echo "PASS: --exclude filter"
 	@./ferp -r --exclude-dir="regex" "module" src/ | grep -qv "regex_types" && echo "PASS: --exclude-dir filter"
 	@echo "=== Binary file tests ==="
-	@printf 'hello\x00world\n' > /tmp/ferp_binary_test.txt
+	@# \000 not \x00: make runs recipes under /bin/sh, and dash before
+	@# 0.5.13 has no \x escape, so the NUL was never written and the file
+	@# did not read as binary.
+	@printf 'hello\000world\n' > /tmp/ferp_binary_test.txt
 	@./ferp "hello" /tmp/ferp_binary_test.txt | grep -q "Binary file" && echo "PASS: binary file detection"
 	@./ferp -a "hello" /tmp/ferp_binary_test.txt | grep -q "hello" && echo "PASS: -a treats binary as text"
 	@./ferp -I "hello" /tmp/ferp_binary_test.txt; test $$? -eq 1 && echo "PASS: -I skips binary"
