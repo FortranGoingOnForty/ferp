@@ -220,42 +220,6 @@ contains
 
   end subroutine get_dirent_name
 
-  function should_include_file(filepath, include_glob, exclude_glob) result(include)
-    !> Check if file should be included based on glob patterns
-    character(len=*), intent(in) :: filepath
-    character(len=*), intent(in) :: include_glob
-    character(len=*), intent(in) :: exclude_glob
-    logical :: include
-
-    character(len=max_path_len) :: basename
-    integer :: i
-
-    include = .true.
-
-    ! Extract basename
-    basename = filepath
-    do i = len_trim(filepath), 1, -1
-      if (filepath(i:i) == '/') then
-        basename = filepath(i+1:)
-        exit
-      end if
-    end do
-
-    ! Check include pattern (if specified, file must match)
-    if (len_trim(include_glob) > 0) then
-      include = glob_match(trim(basename), trim(include_glob))
-      if (.not. include) return
-    end if
-
-    ! Check exclude pattern (if specified and matches, exclude)
-    if (len_trim(exclude_glob) > 0) then
-      if (glob_match(trim(basename), trim(exclude_glob))) then
-        include = .false.
-      end if
-    end if
-
-  end function should_include_file
-
   function should_include_file_multi(filepath, include_globs, num_include, &
                                      exclude_globs, num_exclude) result(include)
     !> Check if file should be included based on multiple glob patterns

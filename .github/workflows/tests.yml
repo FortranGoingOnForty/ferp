@@ -193,16 +193,19 @@ jobs:
               ;;
           esac
 
+      # tests/ is excluded: the suites ship deliberate fixtures with artifact
+      # names, e.g. recursive/code.o, which -r is expected to skip.
       - name: No tracked build artifacts
         run: |
-          bad=$(git ls-files | grep -E '\.(o|a|mod|rej|orig)$' || true)
+          bad=$(git ls-files | grep -vE '^tests/' | grep -E '\.(o|a|mod|rej|orig)$' || true)
           if [ -n "$bad" ]; then
             echo "::error::tracked build artifacts"; echo "$bad"; exit 1
           fi
 
       - name: No tracked compiled binaries
         run: |
-          bad=$(git ls-files -z | xargs -0 file --mime-type \
+          bad=$(git ls-files -z | grep -zvE '^tests/' \
+                | xargs -0 file --mime-type \
                 | grep -E 'application/x-(executable|sharedlib|pie-executable|mach-binary)' || true)
           if [ -n "$bad" ]; then
             echo "::error::tracked compiled binaries"; echo "$bad"; exit 1
