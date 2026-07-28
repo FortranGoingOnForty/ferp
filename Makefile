@@ -78,15 +78,25 @@ OBJS = $(REGEX_OBJS) $(MAIN_OBJS) $(C_OBJS)
 # Default target
 all: $(TARGET)
 
-# Debug build
-debug: FFLAGS = $(FFLAGS_DEBUG)
-debug: CFLAGS = $(CFLAGS_DEBUG)
-debug: clean $(TARGET)
+# Debug and release both write build/*.o with the same names but different
+# flags, so switching configuration requires discarding the old objects.
+#
+# These must NOT be written as `release: clean $(TARGET)`. Prerequisites of a
+# target are unordered, so under -j make runs `clean` and the compiles
+# concurrently and `rm -rf build` lands in the middle of the build:
+#
+#   Fatal Error: Cannot open module file 'build/ferp_kinds.mod0' for writing
+#   error: unable to open output file 'build/simd_scan.o'
+#
+# Recipe lines, by contrast, run in order. The sub-make still inherits -j
+# through the jobserver, so the build itself stays parallel.
+debug:
+	$(MAKE) clean
+	$(MAKE) $(TARGET) FFLAGS='$(FFLAGS_DEBUG)' CFLAGS='$(CFLAGS_DEBUG)'
 
-# Release build
-release: FFLAGS = $(FFLAGS_RELEASE)
-release: CFLAGS = $(CFLAGS_RELEASE)
-release: clean $(TARGET)
+release:
+	$(MAKE) clean
+	$(MAKE) $(TARGET) FFLAGS='$(FFLAGS_RELEASE)' CFLAGS='$(CFLAGS_RELEASE)'
 
 # Create build directory
 $(BUILD_DIR):
